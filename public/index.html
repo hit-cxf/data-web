@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>officeACE · 数据浏览器</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <svg class="icon-definitions" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M3 10h18"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></symbol>
+    <symbol id="i-filter" viewBox="0 0 24 24"><path d="M4 5h16M7 12h10M10 19h4"/><circle cx="9" cy="5" r="2"/><circle cx="15" cy="12" r="2"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-table" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M10 10v10"/></symbol>
+    <symbol id="i-code" viewBox="0 0 24 24"><path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-15-2 18"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 15v5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H5a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V9ZM14 3v6h6M8 14h8M8 17h5"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 3 10 5-10 5L2 8Zm-9 9 9 5 9-5M3 16l9 5 9-5"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-reset" viewBox="0 0 24 24"><path d="M3 10a9 9 0 1 1 2 8M3 4v6h6"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v1"/></symbol>
+  </svg>
+  <header class="site-header">
+    <div class="brand"><div class="brand-mark"><svg><use href="#i-grid"/></svg></div><span class="brand-name">officeACE</span><span class="brand-divider">/</span><span class="brand-page">数据浏览器</span></div>
+    <div class="local-badge"><span></span> 本地工作空间</div>
+  </header>
+  <main>
+    <div class="page-heading"><div><p class="eyebrow">DATA EXPLORER</p><h1>让回流数据，一目了然</h1><p class="page-description">按时间定位记录，筛选关键参数，自由查看每一层数据。</p></div><span class="format-badge"><span>目录格式</span><code>dd / hh / mm / *.json</code></span></div>
+
+    <section class="card source-card" aria-labelledby="source-heading">
+      <div class="section-title"><svg class="icon"><use href="#i-folder"/></svg><h2 id="source-heading">数据目录</h2><span id="source-state" class="tag neutral">尚未连接</span></div>
+      <form id="source-form" class="source-form">
+        <div class="path-input-wrap"><svg class="icon"><use href="#i-folder"/></svg><input id="root-path" type="text" autocomplete="off" spellcheck="false" aria-label="数据根目录" placeholder="输入本机数据根目录的绝对路径，例如 /data/officeACE"></div>
+        <button class="button primary" id="scan-button" type="submit"><svg class="icon"><use href="#i-search"/></svg>扫描目录</button>
+        <button class="button secondary" id="demo-button" type="button">体验示例数据</button>
+      </form>
+      <div class="source-note"><span>选择包含日 / 时 / 分子目录的根目录，路径可随时更换。</span><span id="scan-detail">文件在本机处理</span></div>
+    </section>
+
+    <div class="stat-grid" aria-label="数据概览">
+      <div class="stat-card"><div class="stat-icon teal"><svg class="icon"><use href="#i-layers"/></svg></div><div><div class="stat-label">已加载记录</div><div class="stat-value" id="stat-records">—</div></div><span class="stat-caption">条</span></div>
+      <div class="stat-card"><div class="stat-icon blue"><svg class="icon"><use href="#i-file"/></svg></div><div><div class="stat-label">JSON 文件</div><div class="stat-value" id="stat-files">—</div></div><span class="stat-caption">个</span></div>
+      <div class="stat-card"><div class="stat-icon purple"><svg class="icon"><use href="#i-code"/></svg></div><div><div class="stat-label">发现字段</div><div class="stat-value" id="stat-fields">—</div></div><span class="stat-caption">含嵌套层级</span></div>
+    </div>
+
+    <section class="card filter-card" aria-labelledby="filter-heading">
+      <div class="filter-heading"><div class="section-title"><svg class="icon"><use href="#i-filter"/></svg><h2 id="filter-heading">筛选条件</h2></div><button id="reset-filters" class="text-button" type="button"><svg class="icon"><use href="#i-reset"/></svg>重置条件</button></div>
+      <form id="filter-form">
+        <div class="time-filter"><div class="filter-label"><svg class="icon"><use href="#i-clock"/></svg><span>文件时间区间</span><span class="muted">包含起止分钟</span></div><div class="time-controls"><div class="time-endpoint"><span class="endpoint-label">从</span><label><input id="from-day" type="number" min="1" max="31" placeholder="DD" aria-label="起始日"><span>日</span></label><label><input id="from-hour" type="number" min="0" max="23" placeholder="HH" aria-label="起始小时"><span>时</span></label><label><input id="from-minute" type="number" min="0" max="59" placeholder="MM" aria-label="起始分钟"><span>分</span></label></div><span class="time-dash">→</span><div class="time-endpoint"><span class="endpoint-label">至</span><label><input id="to-day" type="number" min="1" max="31" placeholder="DD" aria-label="结束日"><span>日</span></label><label><input id="to-hour" type="number" min="0" max="23" placeholder="HH" aria-label="结束小时"><span>时</span></label><label><input id="to-minute" type="number" min="0" max="59" placeholder="MM" aria-label="结束分钟"><span>分</span></label></div><span id="available-time" class="available-time">未设置时查询全部文件</span></div></div>
+        <div class="parameter-filters">
+          <div class="parameter-filter start-filter"><label for="start-value">start <span>开始时间 / 标识</span></label><div class="compound-input"><select id="start-operator" aria-label="start 匹配方式"><option value="contains">包含</option><option value="equals">等于</option><option value="between">区间</option></select><input id="start-value" type="text" placeholder="输入 start 值" autocomplete="off"><div id="start-range" class="start-range" hidden><input id="start-from" type="text" placeholder="起始值" aria-label="start 起始值"><span>—</span><input id="start-to" type="text" placeholder="结束值" aria-label="start 结束值"></div></div></div>
+          <div class="parameter-filter"><label for="host-value">host.name <span>主机名称</span></label><div class="compound-input"><select id="host-operator" aria-label="主机匹配方式"><option value="contains">包含</option><option value="equals">等于</option></select><input id="host-value" type="text" placeholder="搜索主机名称" autocomplete="off"></div></div>
+          <div class="parameter-filter"><label for="user-value">user.id <span>用户标识</span></label><div class="compound-input"><select id="user-operator" aria-label="用户匹配方式"><option value="contains">包含</option><option value="equals">等于</option></select><input id="user-value" type="text" placeholder="搜索用户 ID" autocomplete="off"></div></div>
+          <button id="query-button" class="button primary apply-button" type="submit" disabled><svg class="icon"><use href="#i-filter"/></svg>应用筛选</button>
+        </div>
+      </form>
+    </section>
+
+    <div id="message" class="message" role="status" aria-live="polite" hidden></div>
+    <details id="warnings" class="warnings" hidden><summary id="warnings-summary"></summary><ul id="warnings-list"></ul></details>
+
+    <div class="workspace">
+      <aside class="card field-card" aria-labelledby="fields-heading">
+        <div class="field-heading"><div class="section-title"><svg class="icon"><use href="#i-layers"/></svg><h2 id="fields-heading">展示字段</h2></div><span id="selected-count" class="count-badge">0</span></div>
+        <p class="field-help">勾选父级可选择其下全部字段</p>
+        <div class="field-search"><svg class="icon"><use href="#i-search"/></svg><input id="field-search" type="search" placeholder="搜索字段…" aria-label="搜索展示字段"></div>
+        <div class="field-actions"><button id="select-all" type="button" class="text-button">全选</button><button id="select-defaults" type="button" class="text-button">常用字段</button><button id="select-none" type="button" class="text-button">清空</button><button id="collapse-tree" type="button" class="text-button collapse-button" aria-label="折叠所有字段">折叠</button></div>
+        <div id="field-tree" class="field-tree"><div class="field-empty">扫描目录后<br>在这里选择需要展示的字段</div></div>
+        <div class="field-footer"><span class="tiny-dot"></span> 支持对象与数组的逐层选择</div>
+      </aside>
+
+      <section class="card results-card" aria-labelledby="results-heading">
+        <div class="results-heading"><div><div class="results-title-line"><h2 id="results-heading">查询结果</h2><span id="result-count" class="tag neutral">等待加载</span></div><p id="result-detail" class="result-detail">连接数据目录，开始探索回流记录</p></div><button id="export-button" class="button small secondary" type="button" disabled><svg class="icon"><use href="#i-download"/></svg>导出当前页 JSON</button></div>
+        <div class="result-toolbar"><div class="view-tabs" role="tablist" aria-label="结果视图"><button id="table-tab" class="view-tab active" role="tab" aria-selected="true" aria-controls="table-panel" type="button"><svg class="icon"><use href="#i-table"/></svg>表格</button><button id="json-tab" class="view-tab" role="tab" aria-selected="false" aria-controls="json-panel" type="button"><svg class="icon"><use href="#i-code"/></svg>JSON</button></div><label class="sort-control"><span>排列</span><select id="sort-order" aria-label="文件时间排序"><option value="time_desc">时间从新到旧</option><option value="time_asc">时间从旧到新</option></select></label></div>
+        <div id="selected-chips" class="selected-chips"><span class="muted">尚未选择展示字段</span></div>
+        <div id="results-body" class="results-body" aria-busy="false">
+          <div id="empty-state" class="empty-state"><div class="empty-illustration"><svg><use href="#i-folder"/></svg><span class="illustration-dot"></span></div><h3>从一个数据目录开始</h3><p>输入本机目录并扫描，或加载示例数据体验。<br>你的数据只在本地服务中读取和处理。</p></div>
+          <div id="table-panel" class="table-panel" role="tabpanel" aria-labelledby="table-tab" hidden><table id="results-table"><thead></thead><tbody></tbody></table></div>
+          <div id="json-panel" class="json-panel" role="tabpanel" aria-labelledby="json-tab" hidden><pre id="json-output"></pre></div>
+        </div>
+        <div class="pagination"><div class="page-size-control"><span>每页</span><select id="page-size" aria-label="每页记录数"><option value="25">25</option><option value="50" selected>50</option><option value="100">100</option><option value="200">200</option></select><span>条</span></div><span id="page-summary" class="page-summary">暂无记录</span><div class="page-buttons"><button id="previous-page" class="icon-button" aria-label="上一页" disabled><svg class="icon reverse"><use href="#i-chevron"/></svg></button><span id="page-indicator">0 / 0</span><button id="next-page" class="icon-button" aria-label="下一页" disabled><svg class="icon"><use href="#i-chevron"/></svg></button></div></div>
+      </section>
+    </div>
+    <footer class="page-footer"><span>officeACE <span class="footer-divider">·</span> 本地数据工作台</span><span>按需筛选 · 逐层查看</span></footer>
+  </main>
+</body>
+</html>
