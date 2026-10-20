@@ -132,6 +132,131 @@ class DataWebIntegrationTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(b"<html", content.lower())
 
+    def test_deduplicate_uses_complete_json_and_preserves_provenance(self):
+        record = {"start": 1, "attributes": {"host.name": "pc"}, "content": "hello"}
+        for minute in range(3):
+            self.write_json("20/09/%02d/copy.json" % minute, [dict(reversed(list(record.items()))) if minute == 1 else record])
+        self.write_json("20/09/03/different.json", [{**record, "hidden_metadata": "different"}])
+        scan_id = self.scan()["scan_id"]
+        self.assertEqual(self.query(scan_id)["total"], 4)
+        result = self.query(scan_id, deduplicate=True, page_size=1)
+        self.assertEqual((result["raw_total"], result["total"], result["duplicate_count"], result["pages"]), (4, 2, 2, 2))
+        self.assertEqual(result["items"][0]["copies"], 3)
+        status, origins = self.request("POST", "/api/record", {"scan_id": scan_id, "id": result["items"][0]["id"]})
+        self.assertEqual(status, 200, origins)
+        self.assertEqual(origins["total"], 3)
+        self.assertEqual(len({copy["source"] for copy in origins["copies"]}), 3)
+        limited = self.query(scan_id, deduplicate=True, time_from=[20, 9, 1], time_to=[20, 9, 1])
+        self.assertEqual((limited["total"], limited["items"][0]["copies"]), (1, 1))
+        self.assertEqual(self.query(self.scan()["scan_id"], deduplicate=True)["raw_total"], 4)
+
+    def test_presence_filters_distinguish_null_from_absent(self):
+        self.write_json("20/09/00/existence.json", [
+            {"name": "null", "nested": {"value": None}}, {"name": "false", "nested": {"value": False}},
+            {"name": "zero", "nested": {"value": 0}}, {"name": "missing", "nested": {}},
+        ])
+        scan_id = self.scan()["scan_id"]
+        result = self.query(scan_id, field_filters=[{"path": ["nested", "value"], "operator": "exists"}])
+        self.assertEqual(set(self.record_names(result)), {"null", "false", "zero"})
+        result = self.query(scan_id, field_filters=[{"path": ["nested", "value"], "operator": "not_exists"}])
+        self.assertEqual(self.record_names(result), ["missing"])
+
+    @staticmethod
+    def chat_config(**overrides):
+        return {"host_path": ["resourceAttributes", "host.name"], "time_path": ["start"],
+                "session_path": ["conversation_id"], "role_path": ["role"], "content_path": ["content"],
+                "attachment_path": ["attachments"], "tool_path": ["tool_calls"], **overrides}
+
+    def chat_request(self, endpoint, payload):
+        status, result = self.request("POST", endpoint, payload)
+        self.assertEqual(status, 200, result)
+        return result
+
+    def test_conversations_group_by_host_session_sort_instants_and_deduplicate(self):
+        records = [
+            {"start": "2026-10-20T17:02:00+08:00", "resourceAttributes": {"host.name": "a"}, "conversation_id": "s1", "role": "assistant", "content": "last"},
+            {"start": "2026-10-20T09:01:00Z", "resourceAttributes": {"host.name": "a"}, "conversation_id": "s1", "role": "user", "content": "first"},
+            {"start": "2026-10-20T09:03:00Z", "resourceAttributes": {"host.name": "a"}, "conversation_id": "s2", "role": "user", "content": "another session"},
+            {"start": "2026-10-20T09:04:00Z", "resourceAttributes": {"host.name": "b"}, "conversation_id": "s1", "role": "user", "content": "another host"},
+        ]
+        for copy in range(3):
+            self.write_json("20/09/00/copy-%d.json" % copy, records)
+        scan_id = self.scan()["scan_id"]
+        payload = {"scan_id": scan_id, "config": self.chat_config(), "deduplicate": True}
+        groups = self.chat_request("/api/conversations", payload)
+        self.assertEqual(groups["total"], 3)
+        self.assertEqual(sum(group["count"] for group in groups["items"]), 4)
+        result = self.chat_request("/api/conversation/messages", {**payload, "host": "a", "session": "s1", "page_size": 1})
+        self.assertEqual((result["total"], result["pages"]), (2, 2))
+        self.assertEqual(result["items"][0]["content"], "first")
+        self.assertEqual(result["items"][0]["kind"], "user")
+        self.assertEqual(result["items"][0]["copies"], 3)
+        result = self.chat_request("/api/conversation/messages", {**payload, "host": "a", "session": "s1", "page": 2, "page_size": 1})
+        self.assertEqual(result["items"][0]["content"], "last")
+        no_session = self.chat_request("/api/conversations", {**payload, "config": self.chat_config(session_path=None)})
+        self.assertEqual(no_session["total"], 2)
+        filtered = self.chat_request("/api/conversations", {**payload, "field_filters": [{"path": ["role"], "operator": "equals", "value": "assistant"}]})
+        self.assertEqual(filtered["total"], 1)
+        self.assertEqual(filtered["items"][0]["count"], 1)
+
+    def test_message_arrays_sort_globally_keep_full_content_and_tool_details(self):
+        long_text = "完整消息" * 10000
+        user = {"time": 1700000000000, "role": "customer", "content": long_text, "attachments": [{"name": "input.pdf", "extra": "keep all"}]}
+        agent = {"time": 1700000002000, "role": "assistant", "content": "done", "tool_calls": [{"name": "read", "arguments": {"full": long_text}}]}
+        tool = {"time": 1700000001000, "role": "tool", "content": {"result": long_text}}
+        for name, parts in [("one", [agent, user]), ("two", [tool])]:
+            self.write_json("20/09/00/" + name + ".json", [{"resourceAttributes": {"host.name": "a"}, "body": {"messages": parts}}])
+        config = self.chat_config(session_path=None, message_path=["body", "messages"], time_path=["body", "messages", "[]", "time"],
+                                  role_path=["body", "messages", "[]", "role"], content_path=["body", "messages", "[]", "content"],
+                                  tool_path=["body", "messages", "[]", "tool_calls"], attachment_path=["body", "messages", "[]", "attachments"], user_values=["customer"])
+        payload = {"scan_id": self.scan()["scan_id"], "config": config, "host": "a", "session": None}
+        result = self.chat_request("/api/conversation/messages", payload)
+        self.assertEqual([item["kind"] for item in result["items"]], ["user", "tool", "assistant"])
+        self.assertEqual(result["items"][0]["content"], long_text)
+        self.assertEqual(result["items"][0]["attachments"], user["attachments"])
+        self.assertEqual(result["items"][1]["raw"], tool)
+        self.assertEqual(result["items"][2]["tool"], agent["tool_calls"])
+        self.assertEqual([item["timestamp"] for item in result["items"]], [1700000000, 1700000001, 1700000002])
+
+    def test_conversation_missing_time_is_last_and_cache_tracks_rescan(self):
+        path = self.write_json("20/09/00/messages.json", [
+            {"resourceAttributes": {"host.name": "a"}, "role": "unknown", "content": "missing"},
+            {"resourceAttributes": {"host.name": "a"}, "start": "invalid", "content": "invalid"},
+            {"resourceAttributes": {"host.name": "a"}, "start": 1700000000, "content": "valid"},
+        ])
+        payload = {"scan_id": self.scan()["scan_id"], "config": self.chat_config(session_path=None), "host": "a", "session": None}
+        result = self.chat_request("/api/conversation/messages", payload)
+        self.assertEqual([item["content"] for item in result["items"]], ["valid", "missing", "invalid"])
+        self.assertEqual(result["items"][1]["kind"], "record")
+        path.write_text(json.dumps([{"resourceAttributes": {"host.name": "new-host"}, "start": 1700000001, "content": "replacement"}]))
+        payload["scan_id"] = self.scan()["scan_id"]
+        self.assertEqual(self.chat_request("/api/conversation/messages", payload)["total"], 0)
+        groups = self.chat_request("/api/conversations", payload)
+        self.assertEqual([group["host"] for group in groups["items"]], ["new-host"])
+
+    def test_conversation_configuration_validation(self):
+        self.write_json("20/09/00/a.json", [{"start": 1}])
+        scan_id = self.scan()["scan_id"]
+        for config in [None, {}, self.chat_config(host_path="resourceAttributes.host.name"), self.chat_config(time_unit="bad"), self.chat_config(user_values="user")]:
+            status, result = self.request("POST", "/api/conversations", {"scan_id": scan_id, "config": config})
+            self.assertEqual(status, 400, result)
+
+    def test_message_types_can_be_identified_by_field_presence_and_values(self):
+        self.write_json("20/09/00/rules.json", [
+            {"start": 1, "resourceAttributes": {"host.name": "a"}, "payload": {"input": "question"}},
+            {"start": 2, "resourceAttributes": {"host.name": "a"}, "event_type": "answer", "payload": {"output": "complete answer"}},
+            {"start": 3, "resourceAttributes": {"host.name": "a"}, "payload": {"call": {"name": "read", "arguments": {"all": True}}}},
+        ])
+        config = self.chat_config(session_path=None, role_path=None, content_path=None, kind_rules=[
+            {"kind": "user", "conditions": [{"path": ["payload", "input"], "operator": "exists"}], "content_path": ["payload", "input"]},
+            {"kind": "assistant", "conditions": [{"path": ["event_type"], "operator": "equals", "value": "answer"}], "content_path": ["payload", "output"]},
+            {"kind": "tool", "conditions": [{"path": ["payload", "call"], "operator": "exists"}]},
+        ])
+        result = self.chat_request("/api/conversation/messages", {"scan_id": self.scan()["scan_id"], "config": config, "host": "a", "session": None})
+        self.assertEqual([item["kind"] for item in result["items"]], ["user", "assistant", "tool"])
+        self.assertEqual([item["content"] for item in result["items"][:2]], ["question", "complete answer"])
+        self.assertEqual(result["items"][2]["raw"]["payload"]["call"]["arguments"], {"all": True})
+
     def test_arbitrary_field_filters_use_exact_nested_paths(self):
         self.write_json("19/08/00/nested.json", [
             {"name": "match", "start": 10, "resourceAttributes": {

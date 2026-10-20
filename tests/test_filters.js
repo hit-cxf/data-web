@@ -38,7 +38,7 @@ test('query serializes exact arbitrary paths, independent of display field selec
   ];
   api.state.selected.clear();
   assert.deepEqual(plain(api.readQuery()), {
-    time_from: null, time_to: null,
+    time_from: null, time_to: null, deduplicate: false,
     field_filters: [
       { path: ['resourceAttributes', 'host.name'], operator: 'contains', value: 'Company-PC' },
       { path: ['events', '[]', 'user.id'], operator: 'equals', value: 'employee' },
@@ -65,4 +65,12 @@ test('arbitrary numeric or timestamp ranges include only the active operator inp
   assert.deepEqual(plain(api.readFieldFilters()), [
     { path: ['start'], operator: 'between', from: '9', to: '11' },
   ]);
+});
+
+test('presence conditions are active without a keyword', () => {
+  const api = loadFilters();
+  api.state.filterRules = [{ ...api.newFilterRule(['start']), operator: 'exists' }];
+  assert.deepEqual(plain(api.readFieldFilters()), [{ path: ['start'], operator: 'exists' }]);
+  api.state.filterRules[0].operator = 'not_exists';
+  assert.deepEqual(plain(api.readFieldFilters()), [{ path: ['start'], operator: 'not_exists' }]);
 });

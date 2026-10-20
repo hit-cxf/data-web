@@ -6,7 +6,9 @@
   <meta name="color-scheme" content="light">
   <title>officeACE · 数据浏览器</title>
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/conversation.css">
   <script src="/app.js" defer></script>
+  <script src="/conversation.js" defer></script>
 </head>
 <body>
   <svg class="icon-definitions" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -27,9 +29,10 @@
   </svg>
   <header class="site-header">
     <div class="brand"><div class="brand-mark"><svg><use href="#i-grid"/></svg></div><span class="brand-name">officeACE</span><span class="brand-divider">/</span><span class="brand-page">数据浏览器</span></div>
+    <nav class="page-switch" role="tablist" aria-label="页面切换"><button id="page-data" role="tab" aria-selected="true" aria-controls="data-page">数据浏览</button><button id="page-chat" role="tab" aria-selected="false" aria-controls="chat-page">对话回放</button></nav>
     <div class="local-badge"><span></span> 本地工作空间</div>
   </header>
-  <main>
+  <main id="data-page" role="tabpanel" aria-labelledby="page-data">
     <div class="page-heading"><div><p class="eyebrow">DATA EXPLORER</p><h1>让回流数据，一目了然</h1><p class="page-description">按时间定位记录，筛选关键参数，自由查看每一层数据。</p></div><span class="format-badge"><span>目录格式</span><code>dd / hh / mm / *.json</code></span></div>
 
     <section class="card source-card" aria-labelledby="source-heading">
@@ -55,7 +58,7 @@
         <div class="arbitrary-filters">
           <div class="condition-heading"><div><h3>字段筛选</h3><p>选择完整路径后输入关键字，支持任意层级与数组。多个条件同时满足。</p></div><button id="add-filter" class="button small secondary" type="button" disabled>＋ 添加条件</button></div>
           <div id="field-filters" class="filter-rules"><p class="muted">扫描数据目录后，即可选择筛选字段。</p></div>
-          <div class="filter-actions"><p>“包含”不区分大小写。首次筛选某个字段时会建立本地索引，请稍候。</p><button id="query-button" class="button primary apply-button" type="submit" disabled><svg class="icon"><use href="#i-filter"/></svg>应用筛选</button></div>
+          <div class="filter-actions"><div><label class="dedupe-control"><input id="dedupe-records" type="checkbox">过滤相同记录 <span>按完整 JSON 内容，不修改源文件</span></label><p>“包含”不区分大小写。首次筛选某个字段时会建立本地索引，请稍候。</p></div><button id="query-button" class="button primary apply-button" type="submit" disabled><svg class="icon"><use href="#i-filter"/></svg>应用筛选</button></div>
         </div>
       </form>
     </section>
@@ -87,5 +90,26 @@
     </div>
     <footer class="page-footer"><span>officeACE <span class="footer-divider">·</span> 本地数据工作台</span><span>按需筛选 · 逐层查看</span></footer>
   </main>
+  <section id="chat-page" class="chat-page" role="tabpanel" aria-labelledby="page-chat" hidden>
+    <div class="chat-topbar"><div><strong>对话回放</strong><span id="chat-source">先在数据浏览页扫描目录</span></div><div class="chat-top-actions"><button id="chat-demo" class="button secondary small">对话示例</button><button id="chat-settings-button" class="button secondary small">字段与筛选配置</button><button id="chat-load" class="button primary small" disabled>载入对话</button></div></div>
+    <p id="chat-notice" class="chat-notice" role="status" aria-live="polite">根据主机分组，按消息时间顺序回放。请先连接数据目录。</p>
+    <div class="chat-layout">
+      <aside class="chat-sidebar" aria-label="主机与对话列表"><div class="chat-sidebar-heading"><h2>对话</h2><span id="chat-group-count">—</span></div><input id="chat-search" type="search" placeholder="搜索主机 / 会话 ID" aria-label="搜索对话"><div id="chat-groups" class="chat-groups"><p class="chat-placeholder">载入记录后，这里会按主机显示对话。</p></div><button id="chat-more-groups" class="button secondary small" hidden>加载更多对话</button></aside>
+      <section class="chat-window" aria-label="对话窗口"><header class="conversation-heading"><div><h2 id="chat-title">选择一个对话</h2><p id="chat-subtitle">用户消息在右侧，agent 与工具记录在左侧。</p></div><span class="read-only-badge">只读回放</span></header><div id="chat-messages" class="conversation-messages" aria-live="polite"><div class="chat-welcome"><svg class="icon"><use href="#i-layers"/></svg><h3>把回流记录还原成对话</h3><p>在配置中选择主机、时间、角色与内容字段，<br>并按字段是否存在、字段值来筛选记录。</p><button id="chat-welcome-settings" class="button secondary">配置对话字段</button></div></div><footer class="chat-message-footer"><span id="chat-message-count">完整保留内容 · 工具详情默认收起</span><button id="chat-more-messages" class="button secondary small" hidden>载入后续消息</button></footer></section>
+    </div>
+  </section>
+  <dialog id="chat-config-dialog" class="chat-config-dialog" aria-labelledby="chat-config-title"><form id="chat-config-form">
+    <div class="chat-config-heading"><div><h2 id="chat-config-title">对话字段与筛选配置</h2><p>根据你的 JSON 结构选择完整路径；配置保存在当前浏览器。</p></div><button id="chat-config-close" class="icon-button" type="button" aria-label="关闭对话配置">×</button></div>
+    <div class="chat-config-body"><h3>字段映射</h3><div id="chat-mappings" class="chat-mappings"></div>
+      <div class="chat-units"><label for="chat-time-unit">时间戳单位</label><select id="chat-time-unit"><option value="auto">自动识别 Unix 单位 / ISO 日期</option><option value="s">秒</option><option value="ms">毫秒</option><option value="us">微秒</option><option value="ns">纳秒</option></select></div>
+      <p class="chat-config-help">不选会话 ID 时，每台主机为一个对话；选择后按“主机 + 会话 ID”拆分。消息列表字段留空时，一条记录是一条消息；记录含消息数组时，先选择数组，再为角色、内容和时间选择数组内路径。缺失或无效时间的消息保留并排在最后。</p>
+      <h3>角色取值（逗号分隔）</h3><div class="chat-role-values"><label>用户<input id="chat-user-values" type="text" value="user, human"></label><label>Agent<input id="chat-agent-values" type="text" value="assistant, agent, ai"></label><label>工具<input id="chat-tool-values" type="text" value="tool, function, tool_call, tool_result"></label></div>
+      <div class="condition-heading"><div><h3>按字段识别消息类型（可选）</h3><p>没有统一角色字段时，可按字段是否存在或字段值识别用户、Agent、工具，并为该类型指定正文。按规则顺序判断，首次命中生效，优先于角色取值。</p></div><button id="chat-add-kind" type="button" class="button secondary small">＋ 类型规则</button></div><div id="chat-kind-rules"></div>
+      <h3>目录时间区间</h3><div id="chat-time-fields" class="time-controls"></div>
+      <div class="condition-heading chat-condition-heading"><div><h3>记录筛选</h3><p>“存在”保留包含该字段的记录；“包含 / 等于”进一步匹配字段值。条件同时生效。</p></div><button id="chat-add-filter" class="button small secondary" type="button">＋ 添加条件</button></div><div id="chat-field-filters" class="filter-rules"></div>
+      <label class="dedupe-control chat-dedupe"><input id="chat-deduplicate" type="checkbox" checked>过滤完整内容相同的记录</label><p class="chat-config-help">筛选作用于原始记录。记录含消息数组时，会保留匹配记录中的全部消息。正文留空时展示完整消息 JSON；工具详情和附件原始内容均可展开查看。</p>
+      <p id="chat-config-error" class="chat-config-error" role="alert" hidden></p>
+    </div><div class="chat-config-footer"><button id="chat-reset-config" class="text-button" type="button">恢复自动映射</button><button class="button primary" type="submit">应用配置并载入</button></div>
+  </form></dialog>
 </body>
 </html>

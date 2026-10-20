@@ -2,6 +2,7 @@
 """Local officeACE explorer. Python 3.9+, standard library only."""
 
 import argparse
+import hashlib
 import json
 import math
 import mimetypes
@@ -20,7 +21,7 @@ from urllib.parse import unquote, urlsplit
 BASE_DIR = Path(__file__).resolve().parent
 PUBLIC_DIR = BASE_DIR / "public"
 CACHE_DIR = BASE_DIR / ".cache"
-VERSION = "1.1"
+VERSION = "1.2"
 MAX_BODY_BYTES = 1024 * 1024
 MAX_PAGE_SIZE = 200
 SCAN_LOCK = threading.Lock()
@@ -94,6 +95,36 @@ def initialize_database():
             CREATE INDEX IF NOT EXISTS field_text_idx ON field_values(path_id,value_text,record_id);
             CREATE INDEX IF NOT EXISTS field_number_idx ON field_values(path_id,value_kind,value_number,record_id);
         """)
+        if "fingerprint" not in {row[1] for row in conn.execute("PRAGMA table_info(records)")}:
+            conn.execute("ALTER TABLE records ADD COLUMN fingerprint TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS record_fingerprint_idx ON records(fingerprint)")
+        import conversation
+        conversation.initialize(conn)
+
+
+def fingerprint(record):
+    canonical = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def ensure_fingerprints(scan_id):
+    with SCAN_LOCK:
+        conn = connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            check_scan(conn, scan_id)
+            while True:
+                rows = conn.execute("SELECT id,document FROM records WHERE fingerprint IS NULL LIMIT 500").fetchall()
+                if not rows:
+                    break
+                conn.executemany("UPDATE records SET fingerprint=? WHERE id=?",
+                                 [(fingerprint(json.loads(row["document"])), row["id"]) for row in rows])
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
 
 def metadata(conn, key):
@@ -364,9 +395,9 @@ def scan_data(payload):
                         kind, number = indexed_start(start)
                         conn.execute(
                             """INSERT INTO records(file_id,record_index,document,start_text,start_fold,start_kind,start_number,
-                            host_text,host_fold,user_text,user_fold) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                            host_text,host_fold,user_text,user_fold,fingerprint) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                             (file_id, record_index, document, start, start.casefold() if start else start, kind, number,
-                             host, host.casefold() if host else host, user, user.casefold() if user else user),
+                             host, host.casefold() if host else host, user, user.casefold() if user else user, fingerprint(record)),
                         )
                         collect_fields(record, fields)
                         count += 1
@@ -484,10 +515,12 @@ def prepare_field_filters(settings):
                 any(not isinstance(part, str) or len(part) > 1024 for part in path)):
             raise APIError(label + " 的 path 必须为完整字段路径的字符串数组。")
         operator = setting.get("operator", "contains")
-        if operator not in ("contains", "equals", "between"):
+        if operator not in ("contains", "equals", "between", "exists", "not_exists"):
             raise APIError(label + " 筛选方式无效。")
         rule = {"path": tuple(path), "operator": operator}
-        if operator == "between":
+        if operator in ("exists", "not_exists"):
+            pass
+        elif operator == "between":
             lower = range_value(setting.get("from", ""), label + " 起点")
             upper = range_value(setting.get("to", ""), label + " 终点")
             if lower and upper:
@@ -577,7 +610,9 @@ def field_filter_clauses(rules, path_ids, conditions, arguments):
     for rule in rules:
         predicates = ["v.path_id=?"]
         values = [path_ids[rule["path"]]]
-        if rule["operator"] == "between":
+        if rule["operator"] in ("exists", "not_exists"):
+            pass
+        elif rule["operator"] == "between":
             lower, upper = rule["lower"], rule["upper"]
             predicates.append("v.value_kind=?")
             values.append((lower or upper)[0])
@@ -593,12 +628,17 @@ def field_filter_clauses(rules, path_ids, conditions, arguments):
         else:
             predicates.append("instr(v.value_fold,?)>0")
             values.append(rule["value"].casefold())
-        conditions.append("r.id IN (SELECT v.record_id FROM field_values v WHERE " + " AND ".join(predicates) + ")")
+        comparison = "NOT IN" if rule["operator"] == "not_exists" else "IN"
+        conditions.append("r.id " + comparison + " (SELECT v.record_id FROM field_values v WHERE " + " AND ".join(predicates) + ")")
         arguments.extend(values)
 
 
-def query_data(payload):
-    started = time.perf_counter()
+def check_scan(conn, scan_id):
+    if metadata(conn, "scan_id") != scan_id:
+        raise APIError("数据索引已更新或尚未建立，请重新扫描目录。", 409)
+
+
+def query_scope(payload):
     scan_id = payload.get("scan_id")
     if not isinstance(scan_id, str) or not scan_id:
         raise APIError("请先扫描数据目录。")
@@ -606,64 +646,107 @@ def query_data(payload):
     upper = time_value(payload.get("time_to"), "目录时间终点")
     if lower is not None and upper is not None and lower > upper:
         raise APIError("目录时间起点不能晚于终点。")
-    page = payload.get("page", 1)
-    page_size = payload.get("page_size", 50)
-    if type(page) is not int or not 1 <= page <= 2147483647:
-        raise APIError("page 必须为正整数。")
-    if type(page_size) is not int or not 1 <= page_size <= MAX_PAGE_SIZE:
-        raise APIError("page_size 必须介于 1 和 %d。" % MAX_PAGE_SIZE)
-    sort = payload.get("sort", "time_desc")
-    if sort not in ("time_asc", "time_desc"):
-        raise APIError("sort 必须为 time_asc 或 time_desc。")
-    file_conditions = []
-    file_arguments = []
+    file_conditions, file_arguments = [], []
     if lower is not None:
         file_conditions.append("f.time_key>=?")
         file_arguments.append(lower)
     if upper is not None:
         file_conditions.append("f.time_key<=?")
         file_arguments.append(upper)
-    conditions = list(file_conditions)
-    arguments = list(file_arguments)
+    conditions, arguments = list(file_conditions), list(file_arguments)
     filter_clause(payload.get("filters", {}), conditions, arguments)
-    field_rules = prepare_field_filters(payload.get("field_filters", []))
-    path_ids = ensure_field_indexes(scan_id, [rule["path"] for rule in field_rules], file_conditions, file_arguments)
-    field_filter_clauses(field_rules, path_ids, conditions, arguments)
-    where = " WHERE " + " AND ".join(conditions) if conditions else ""
-    file_where = " WHERE " + " AND ".join(file_conditions) if file_conditions else ""
+    rules = prepare_field_filters(payload.get("field_filters", []))
+    path_ids = ensure_field_indexes(scan_id, [rule["path"] for rule in rules], file_conditions, file_arguments)
+    field_filter_clauses(rules, path_ids, conditions, arguments)
+    deduplicate = payload.get("deduplicate", False)
+    if type(deduplicate) is not bool:
+        raise APIError("deduplicate 必须为布尔值。")
+    if deduplicate:
+        ensure_fingerprints(scan_id)
+    return {"scan_id": scan_id, "arguments": arguments, "deduplicate": deduplicate,
+            "where": " WHERE " + " AND ".join(conditions) if conditions else "",
+            "file_where": " WHERE " + " AND ".join(file_conditions) if file_conditions else "",
+            "file_arguments": file_arguments}
+
+
+def matched_cte(scope):
+    base = "WITH matched AS (SELECT r.id,r.fingerprint FROM records r JOIN files f ON f.id=r.file_id" + scope["where"] + ")"
+    selected = "SELECT MIN(id) AS id,COUNT(*) AS copies FROM matched GROUP BY fingerprint" if scope["deduplicate"] else "SELECT id,1 AS copies FROM matched"
+    return base + ", selected AS (" + selected + ") "
+
+
+def page_arguments(payload, default_size=50):
+    page, size = payload.get("page", 1), payload.get("page_size", default_size)
+    if type(page) is not int or not 1 <= page <= 2147483647:
+        raise APIError("page 必须为正整数。")
+    if type(size) is not int or not 1 <= size <= MAX_PAGE_SIZE:
+        raise APIError("page_size 必须介于 1 和 %d。" % MAX_PAGE_SIZE)
+    return page, size
+
+
+def query_data(payload):
+    started = time.perf_counter()
+    page, page_size = page_arguments(payload)
+    sort = payload.get("sort", "time_desc")
+    if sort not in ("time_asc", "time_desc"):
+        raise APIError("sort 必须为 time_asc 或 time_desc。")
+    scope = query_scope(payload)
+    cte, args = matched_cte(scope), scope["arguments"]
     conn = connect()
     try:
-        # Explicit read transaction keeps count, page and schema on one snapshot.
         conn.execute("BEGIN")
-        if metadata(conn, "scan_id") != scan_id:
-            raise APIError("数据索引已更新或尚未建立，请重新扫描目录。", 409)
-        total = conn.execute("SELECT COUNT(*) FROM records r JOIN files f ON f.id=r.file_id" + where, arguments).fetchone()[0]
+        check_scan(conn, scope["scan_id"])
+        counts = conn.execute(cte + "SELECT (SELECT COUNT(*) FROM matched),(SELECT COUNT(*) FROM selected)", args).fetchone()
+        raw_total, total = counts
         pages = math.ceil(total / page_size) if total else 0
         page = min(page, max(pages, 1))
         order = "ASC" if sort == "time_asc" else "DESC"
-        rows = conn.execute(
-            "SELECT r.id,r.record_index,r.document,f.path,f.day,f.hour,f.minute FROM records r JOIN files f ON f.id=r.file_id" +
-            where + " ORDER BY f.time_key " + order + ",f.path ASC,r.record_index ASC LIMIT ? OFFSET ?",
-            arguments + [page_size, (page - 1) * page_size],
-        ).fetchall()
-        file_rows = conn.execute("SELECT f.* FROM files f" + file_where + " ORDER BY f.time_key,f.path", file_arguments).fetchall()
+        rows = conn.execute(cte +
+            "SELECT r.id,r.record_index,r.document,q.copies,f.path,f.day,f.hour,f.minute FROM selected q JOIN records r ON r.id=q.id JOIN files f ON f.id=r.file_id" +
+            " ORDER BY f.time_key " + order + ",f.path ASC,r.record_index ASC LIMIT ? OFFSET ?",
+            args + [page_size, (page - 1) * page_size]).fetchall()
+        file_rows = conn.execute("SELECT f.* FROM files f" + scope["file_where"] + " ORDER BY f.time_key,f.path", scope["file_arguments"]).fetchall()
         warnings = json.loads(metadata(conn, "scan_warnings") or "[]")
         for row in file_rows:
             warnings.extend(row["path"] + "：" + warning for warning in json.loads(row["warnings_json"]))
         return {
             "items": [{"id": str(row["id"]), "source": row["path"], "record": json.loads(row["document"]),
-                       "time": [row["day"], row["hour"], row["minute"]]} for row in rows],
-            "total": total, "page": page, "page_size": page_size, "pages": pages,
+                       "copies": row["copies"], "time": [row["day"], row["hour"], row["minute"]]} for row in rows],
+            "total": total, "raw_total": raw_total, "duplicate_count": raw_total - total,
+            "deduplicate": scope["deduplicate"], "page": page, "page_size": page_size, "pages": pages,
             "file_count": len(file_rows), "fields": merge_fields(file_rows),
-            "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
-            "warnings": limited_warnings(warnings),
+            "elapsed_ms": round((time.perf_counter() - started) * 1000, 1), "warnings": limited_warnings(warnings),
         }
     finally:
         conn.close()
 
 
+def record_details(payload):
+    scan_id = payload.get("scan_id")
+    if not isinstance(scan_id, str):
+        raise APIError("请先扫描目录。")
+    record_id = payload.get("id")
+    if not isinstance(record_id, str) or not record_id.isdigit():
+        raise APIError("记录 id 无效。")
+    ensure_fingerprints(scan_id)
+    conn = connect()
+    try:
+        conn.execute("BEGIN")
+        check_scan(conn, scan_id)
+        row = conn.execute("SELECT document,fingerprint FROM records WHERE id=?", (record_id,)).fetchone()
+        if not row:
+            raise APIError("记录不存在。", 404)
+        total = conn.execute("SELECT COUNT(*) FROM records WHERE fingerprint=?", (row["fingerprint"],)).fetchone()[0]
+        copies = conn.execute("SELECT r.id,r.record_index,f.path FROM records r JOIN files f ON f.id=r.file_id WHERE r.fingerprint=? ORDER BY f.path,r.record_index LIMIT 200", (row["fingerprint"],)).fetchall()
+        return {"record": json.loads(row["document"]), "total": total,
+                "copies": [{"id": str(item["id"]), "source": item["path"], "index": item["record_index"] + 1} for item in copies],
+                "has_more": total > len(copies)}
+    finally:
+        conn.close()
+
+
 class Handler(BaseHTTPRequestHandler):
-    server_version = "OfficeACE/1.0"
+    server_version = "OfficeACE/" + VERSION
 
     def send_json(self, status, payload):
         content = compact_json(payload).encode("utf-8")
@@ -705,7 +788,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             self.check_origin()
             endpoint = urlsplit(self.path).path
-            if endpoint not in ("/api/scan", "/api/query"):
+            if endpoint not in ("/api/scan", "/api/query", "/api/record", "/api/conversations", "/api/conversation/messages"):
                 raise APIError("接口不存在。", 404)
             if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
                 raise APIError("请求 Content-Type 应为 application/json。", 415)
@@ -721,7 +804,16 @@ class Handler(BaseHTTPRequestHandler):
                 raise APIError("请求 JSON 无法解析。")
             if not isinstance(payload, dict):
                 raise APIError("请求 JSON 顶层必须为对象。")
-            result = scan_data(payload) if endpoint == "/api/scan" else query_data(payload)
+            if endpoint == "/api/scan":
+                result = scan_data(payload)
+            elif endpoint == "/api/query":
+                result = query_data(payload)
+            elif endpoint == "/api/record":
+                result = record_details(payload)
+            else:
+                import conversation
+                backend = sys.modules[__name__]
+                result = conversation.list_conversations(payload, backend) if endpoint == "/api/conversations" else conversation.conversation_messages(payload, backend)
             self.send_json(200, result)
         except APIError as error:
             self.send_json(error.status, {"error": str(error)})
@@ -739,7 +831,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/status":
                 self.send_json(200, {"default_root": self.server.default_root,
                                      "demo_root": str(BASE_DIR / "demo-data"), "version": VERSION,
-                                     "capabilities": ["field_filters"]})
+                                     "chat_demo_root": str(BASE_DIR / "chat-demo-data"),
+                                     "capabilities": ["field_filters", "conversations", "deduplicate"]})
                 return
             if path.startswith("/api/"):
                 raise APIError("接口不存在。", 404)

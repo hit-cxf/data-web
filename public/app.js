@@ -64,6 +64,7 @@ function updateControls() {
   $('scan-button').disabled = state.busy || !state.serviceReady;
   $('demo-button').disabled = state.busy || !state.serviceReady || !state.demoRoot;
   $('query-button').disabled = state.busy || !state.serviceReady || !state.scan;
+  $('dedupe-records').disabled = state.busy || !state.scan;
   $('add-filter').disabled = state.busy || !state.scan || state.filterRules.length >= 20;
   $('reset-filters').disabled = state.busy || !state.scan;
   $('sort-order').disabled = state.busy || !state.scan;
@@ -104,110 +105,107 @@ function newFilterRule(path = null) {
   return { id: state.nextFilterId++, path, operator: 'contains', value: '', from: '', to: '' };
 }
 
-function readFieldFilters() {
-  return state.filterRules.flatMap((rule, index) => {
-    const active = rule.operator === 'between' ? rule.from.trim() || rule.to.trim() : rule.value.trim();
+function readFieldFilters(rules = state.filterRules) {
+  return rules.flatMap((rule, index) => {
+    const presence = ['exists', 'not_exists'].includes(rule.operator);
+    const active = presence || (rule.operator === 'between' ? rule.from.trim() || rule.to.trim() : rule.value.trim());
     if (!active) return [];
-    if (!rule.path || !state.nodes.has(pathKey(rule.path))) {
-      throw new Error(`请先为第 ${index + 1} 个条件选择完整的筛选字段。`);
-    }
+    if (!rule.path || !state.nodes.has(pathKey(rule.path))) throw new Error(`请先为第 ${index + 1} 个条件选择完整的筛选字段。`);
+    if (presence) return [{ path: [...rule.path], operator: rule.operator }];
     return [rule.operator === 'between'
       ? { path: [...rule.path], operator: rule.operator, from: rule.from.trim(), to: rule.to.trim() }
       : { path: [...rule.path], operator: rule.operator, value: rule.value.trim() }];
   });
 }
 
-function renderFilterRules() {
-  const container = $('field-filters');
-  container.replaceChildren();
-  if (!state.filterRules.length) container.append(element('p', 'no-filter-note', '未添加字段条件，查询时间区间内的全部记录。'));
-  state.filterRules.forEach((rule, index) => {
-    const row = element('div', 'filter-rule');
-    const picker = element('details', 'filter-field-picker');
-    const summary = element('summary');
-    summary.setAttribute('aria-label', `筛选条件 ${index + 1} 的字段`);
-    const selected = element('span', 'filter-selected-path', rule.path ? displayPath(rule.path) : '选择筛选字段');
+function createFieldPicker(path, label, onSelect, options = {}) {
+  const picker = element('details', 'filter-field-picker');
+  const summary = element('summary');
+  summary.setAttribute('aria-label', label);
+  const selected = element('span', 'filter-selected-path', path ? displayPath(path) : options.placeholder || '选择筛选字段');
+  selected.title = selected.textContent;
+  summary.append(selected, icon('chevron'));
+  picker.append(summary);
+  const dropdown = element('div', 'filter-field-dropdown');
+  const search = element('input', 'filter-field-search');
+  search.type = 'search';
+  search.placeholder = '搜索字段，例如 host.name';
+  search.setAttribute('aria-label', options.searchLabel || `${label}：搜索字段`);
+  const list = element('div', 'filter-field-options');
+  const choose = (value) => {
+    onSelect(value ? [...value] : null);
+    selected.textContent = value ? displayPath(value) : options.placeholder || '不映射';
     selected.title = selected.textContent;
-    summary.append(selected, icon('chevron'));
-    picker.append(summary);
-    const dropdown = element('div', 'filter-field-dropdown');
-    const search = element('input', 'filter-field-search');
-    search.type = 'search';
-    search.placeholder = '搜索字段，例如 host.name';
-    search.setAttribute('aria-label', `搜索第 ${index + 1} 个筛选字段`);
-    const options = element('div', 'filter-field-options');
-    const drawOptions = () => {
-      const keyword = search.value.trim().toLowerCase();
-      const matches = [...state.nodes.values()].filter((node) => displayPath(node.path).toLowerCase().includes(keyword));
-      options.replaceChildren();
-      matches.slice(0, 200).forEach((node) => {
-        const option = element('button', 'filter-field-option');
-        option.type = 'button';
-        option.title = displayPath(node.path);
-        option.setAttribute('aria-label', `筛选字段 ${displayPath(node.path)}`);
-        option.append(element('span', '', displayPath(node.path)), element('small', '', typeLabel(node.types)));
-        option.addEventListener('click', () => {
-          rule.path = [...node.path];
-          selected.textContent = displayPath(rule.path);
-          selected.title = selected.textContent;
-          picker.open = false;
-          summary.focus();
-        });
-        options.append(option);
-      });
-      if (!matches.length) options.append(element('p', 'no-filter-note', '没有匹配的字段。请尝试其他字段名。'));
-      if (matches.length > 200) options.append(element('p', 'no-filter-note', `显示前 200 项，共 ${matches.length} 项；输入更多关键字缩小范围。`));
-    };
-    search.addEventListener('input', drawOptions);
-    search.addEventListener('keydown', (event) => {
-      // Searching for a field must not accidentally submit the query form.
-      if (event.key === 'Enter') { event.preventDefault(); options.querySelector('button')?.focus(); }
-      if (event.key === 'Escape') { event.preventDefault(); picker.open = false; summary.focus(); }
+    picker.open = false;
+    summary.focus();
+  };
+  function draw() {
+    const term = search.value.trim().toLowerCase();
+    const matches = [...state.nodes.values()].filter((node) => displayPath(node.path).toLowerCase().includes(term));
+    list.replaceChildren();
+    if (options.optional) {
+      const empty = element('button', 'filter-field-option', options.placeholder || '不映射');
+      empty.type = 'button'; empty.addEventListener('click', () => choose(null)); list.append(empty);
+    }
+    matches.slice(0, 200).forEach((node) => {
+      const button = element('button', 'filter-field-option');
+      button.type = 'button'; button.title = displayPath(node.path);
+      button.setAttribute('aria-label', `${options.optionPrefix || '筛选字段'} ${displayPath(node.path)}`);
+      button.append(element('span', '', displayPath(node.path)), element('small', '', typeLabel(node.types)));
+      button.addEventListener('click', () => choose(node.path)); list.append(button);
     });
-    picker.addEventListener('toggle', () => {
-      if (picker.open) {
-        container.querySelectorAll('details[open]').forEach((other) => { if (other !== picker) other.open = false; });
-        drawOptions();
-        search.focus();
-      }
-    });
-    dropdown.append(search, options);
-    picker.append(dropdown);
+    if (!matches.length) list.append(element('p', 'no-filter-note', '没有匹配字段。'));
+    if (matches.length > 200) list.append(element('p', 'no-filter-note', `显示前 200 项，共 ${matches.length} 项，请搜索缩小范围。`));
+  }
+  search.addEventListener('input', draw);
+  search.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') { event.preventDefault(); list.querySelector('button')?.focus(); }
+    if (event.key === 'Escape') { event.preventDefault(); picker.open = false; summary.focus(); }
+  });
+  picker.addEventListener('toggle', () => {
+    if (picker.open) {
+      document.querySelectorAll('details.filter-field-picker[open]').forEach((other) => { if (other !== picker) other.open = false; });
+      draw(); search.focus();
+    }
+  });
+  dropdown.append(search, list); picker.append(dropdown);
+  return picker;
+}
+
+function renderFilterRules(options = {}) {
+  const rules = options.rules || state.filterRules;
+  const container = $(options.containerId || 'field-filters');
+  const prefix = options.labelPrefix || '筛选条件';
+  const redraw = () => { renderFilterRules(options); options.onChange?.(); };
+  container.replaceChildren();
+  if (!rules.length) container.append(element('p', 'no-filter-note', '无字段限制，保留时间区间内全部记录。'));
+  rules.forEach((rule, index) => {
+    const row = element('div', 'filter-rule');
+    const picker = createFieldPicker(rule.path, `${prefix} ${index + 1} 的字段`, (path) => {
+      rule.path = path; options.onChange?.();
+    }, { searchLabel: options.labelPrefix ? `搜索${prefix} ${index + 1} 的字段` : `搜索第 ${index + 1} 个筛选字段` });
     const operator = element('select', 'filter-operator');
-    operator.setAttribute('aria-label', `筛选条件 ${index + 1} 的匹配方式`);
-    [['contains', '包含'], ['equals', '等于'], ['between', '区间']].forEach(([value, text]) => {
-      const option = element('option', '', text);
-      option.value = value;
-      operator.append(option);
+    operator.setAttribute('aria-label', `${prefix} ${index + 1} 的匹配方式`);
+    [['contains', '包含'], ['equals', '等于'], ['between', '区间'], ['exists', '存在'], ['not_exists', '不存在']].forEach(([value, text]) => {
+      const option = element('option', '', text); option.value = value; operator.append(option);
     });
     operator.value = rule.operator;
-    operator.addEventListener('change', () => { rule.operator = operator.value; renderFilterRules(); });
+    operator.addEventListener('change', () => { rule.operator = operator.value; redraw(); });
     const values = element('div', 'filter-rule-values');
-    const addValueInput = (key, placeholder, label) => {
-      const input = element('input');
-      input.type = 'text';
-      input.autocomplete = 'off';
-      input.value = rule[key];
-      input.placeholder = placeholder;
-      input.setAttribute('aria-label', `筛选条件 ${index + 1} 的${label}`);
-      input.addEventListener('input', () => { rule[key] = input.value; });
-      values.append(input);
+    const addInput = (key, placeholder, label) => {
+      const input = element('input'); input.type = 'text'; input.autocomplete = 'off';
+      input.value = rule[key]; input.placeholder = placeholder;
+      input.setAttribute('aria-label', `${prefix} ${index + 1} 的${label}`);
+      input.addEventListener('input', () => { rule[key] = input.value; options.onChange?.(); }); values.append(input);
     };
     if (rule.operator === 'between') {
-      addValueInput('from', '起始值（数字或 ISO 日期）', '起始值');
-      values.append(element('span', '', '—'));
-      addValueInput('to', '结束值（可留空）', '结束值');
-    } else addValueInput('value', '输入字段值的关键字', '关键字');
-    const remove = element('button', 'icon-button remove-filter', '×');
-    remove.type = 'button';
-    remove.setAttribute('aria-label', `删除筛选条件 ${index + 1}`);
-    remove.addEventListener('click', () => {
-      state.filterRules = state.filterRules.filter((item) => item.id !== rule.id);
-      renderFilterRules();
-      updateControls();
-    });
-    row.append(picker, operator, values, remove);
-    container.append(row);
+      addInput('from', '起始值（数字或 ISO 日期）', '起始值'); values.append(element('span', '', '—')); addInput('to', '结束值（可留空）', '结束值');
+    } else if (['exists', 'not_exists'].includes(rule.operator)) values.append(element('span', 'presence-note', '判断字段是否存在，包括 null、false 和 0'));
+    else addInput('value', '输入字段值的关键字', '关键字');
+    const remove = element('button', 'icon-button remove-filter', '×'); remove.type = 'button';
+    remove.setAttribute('aria-label', `删除${prefix} ${index + 1}`);
+    remove.addEventListener('click', () => { rules.splice(index, 1); redraw(); updateControls(); });
+    row.append(picker, operator, values, remove); container.append(row);
   });
 }
 
@@ -230,6 +228,7 @@ function readQuery() {
   return {
     time_from: from, time_to: to,
     field_filters: readFieldFilters(),
+    deduplicate: Boolean($('dedupe-records').checked),
   };
 }
 
@@ -260,6 +259,7 @@ async function scanDirectory(root, isDemo = false) {
     state.query = readQuery();
     showWarnings(scan.warnings || []);
     await queryPage(1, { token, signal });
+    window.dispatchEvent(new CustomEvent('officeace:scan'));
   } catch (error) {
     if (error.name === 'AbortError' || token !== state.request) return;
     if (state.scan) {
@@ -509,7 +509,7 @@ function renderResults() {
   $('result-count').textContent = result ? `${numberFormat.format(result.total)} 条` : '等待加载';
   $('result-count').className = `tag ${result ? 'success' : 'neutral'}`;
   $('result-detail').textContent = result
-    ? `时间区间内 ${numberFormat.format(result.file_count)} 个文件 · 查询耗时 ${numberFormat.format(result.elapsed_ms)} ms${state.isDemo ? ' · 当前为示例数据' : ''}`
+    ? `时间区间内 ${numberFormat.format(result.file_count)} 个文件 · 查询耗时 ${numberFormat.format(result.elapsed_ms)} ms${result.deduplicate ? ` · 原始 ${numberFormat.format(result.raw_total)} 条，过滤 ${numberFormat.format(result.duplicate_count)} 条重复` : ''}${state.isDemo ? ' · 当前为示例数据' : ''}`
     : '连接数据目录，开始探索回流记录';
   if (!result) setEmpty('从一个数据目录开始', '输入本机目录并扫描，或加载示例数据体验。你的数据只在本地服务中读取和处理。');
   else if (result.total === 0) setEmpty('没有找到匹配的记录', '试试放宽时间区间、调整筛选条件，或检查目录中的 JSON 数据。', 'search');
@@ -563,6 +563,21 @@ function renderTable(nodes) {
     const wrapper = element('div', 'detail-wrapper');
     const meta = element('div', 'detail-meta');
     meta.append(element('span', '', '来源文件'), element('code', '', item.source));
+    if (item.copies > 1) meta.append(element('span', 'duplicate-tag', `${item.copies} 份相同记录`));
+    const origins = element('button', 'text-button', '查看原始记录与重复来源');
+    origins.type = 'button';
+    const originDetail = element('pre'); originDetail.hidden = true;
+    origins.addEventListener('click', async () => {
+      origins.disabled = true;
+      try {
+        const data = await api('/api/record', { scan_id: state.scan.scan_id, id: item.id });
+        originDetail.textContent = `全目录共 ${data.total} 份完整内容相同的记录\n` + data.copies.map((copy) => `${copy.source} · 第 ${copy.index} 条`).join('\n') +
+          (data.has_more ? '\n仅显示前 200 个来源。' : '') + '\n\n原始 JSON：\n' + JSON.stringify(data.record, null, 2);
+        originDetail.hidden = false;
+      } catch (error) { originDetail.textContent = error.message; originDetail.hidden = false; }
+      finally { origins.disabled = false; }
+    });
+    wrapper.append(origins, originDetail);
     wrapper.append(meta, element('pre', '', JSON.stringify(project(item.record, trie), null, 2)));
     detailCell.append(wrapper);
     detail.append(detailCell);
@@ -634,17 +649,32 @@ $('sort-order').addEventListener('change', () => {
 $('previous-page').addEventListener('click', () => { if (!state.busy && state.result?.page > 1) queryPage(state.result.page - 1); });
 $('next-page').addEventListener('click', () => { if (!state.busy && state.result?.page < state.result?.pages) queryPage(state.result.page + 1); });
 $('export-button').addEventListener('click', exportCurrentPage);
+$('dedupe-records').addEventListener('change', () => {
+  if (state.busy || !state.scan) return;
+  state.query = { ...state.query, deduplicate: $('dedupe-records').checked }; queryPage(1);
+});
+function switchPage(page) {
+  $('data-page').hidden = page !== 'data'; $('chat-page').hidden = page !== 'chat';
+  $('page-data').setAttribute('aria-selected', String(page === 'data'));
+  $('page-chat').setAttribute('aria-selected', String(page === 'chat'));
+  document.body.classList.toggle('chat-active', page === 'chat');
+  if (page === 'chat') window.dispatchEvent(new CustomEvent('officeace:chat-open'));
+}
+$('page-data').addEventListener('click', () => switchPage('data'));
+$('page-chat').addEventListener('click', () => switchPage('chat'));
 
 async function initialize() {
   try { $('root-path').value = localStorage.getItem('officeace-directory') || ''; } catch {}
   updateControls();
   try {
     const status = await api('/api/status');
-    if (!status.capabilities?.includes('field_filters')) {
+    if (!['field_filters', 'deduplicate', 'conversations'].every((feature) => status.capabilities?.includes(feature))) {
       throw new Error('后台版本不支持任意字段筛选，请停止并重新运行 server.py，然后刷新页面。');
     }
     state.serviceReady = true;
     state.demoRoot = status.demo_root;
+    state.chatDemoRoot = status.chat_demo_root;
+    window.dispatchEvent(new CustomEvent('officeace:ready'));
     if (!$('root-path').value && status.default_root) $('root-path').value = status.default_root;
     updateControls();
   } catch (error) { message(`无法连接本地数据服务：${error.message}`, 'error'); }
