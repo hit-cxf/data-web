@@ -110,7 +110,39 @@ class TraceViewTests(unittest.TestCase):
         self.assertEqual(spans['items'][0]['duration'],1.25)
         self.assertEqual(traceview.duration([1,1000000000],'ns'),None)
 
+    def test_dns_diagnostics_multi_span_filter_and_cached_paging(self):
+        self.write(self.records + [
+            {'traceId':'dns1','spanId':'d1','spanName':'dns.lookup','start':3000},
+            {'traceId':'dns2','spanId':'d2','spanName':'dns.lookup','start':4000}])
+        first=traceview.list_traces(self.payload,server)
+        self.assertEqual(first['items'][0]['name'],'dns.lookup')
+        self.assertFalse(first['cache_hit'])
+        self.assertEqual(first['diagnostics']['dns_single_traces'],2)
+        self.assertEqual(first['diagnostics']['single_traces'],3)
+        calls=[]
+        original_connect=server.connect
+        def instrumented():
+            conn=original_connect()
+            conn.set_trace_callback(calls.append)
+            return conn
+        server.connect=instrumented
+        try:
+            multi=traceview.list_traces({**self.payload,'min_spans':2,'sort':'spans_desc'},server)
+        finally:
+            server.connect=original_connect
+        self.assertTrue(multi['cache_hit'])
+        self.assertEqual(multi['total'],1)
+        self.assertEqual(multi['items'][0]['trace_id'],'t1')
+        self.assertFalse(any('FROM selected q CROSS JOIN trace_spans' in sql for sql in calls))
+        self.assertEqual(traceview.list_traces({**self.payload,'search':'dns'},server)['total'],2)
+        self.assertEqual(traceview.list_traces({**self.payload,'search':'dns','min_spans':2},server)['total'],0)
+
     def test_mapping_and_request_validation(self):
+        for value in [0, True, '2']:
+            with self.assertRaises(server.APIError):
+                traceview.list_traces({**self.payload,'min_spans':value},server)
+        with self.assertRaises(server.APIError):
+            traceview.list_traces({**self.payload,'sort':'unknown'},server)
         for mapping in [{'duration_unit':'auto'},{'span':'spanId'},{'time_unit':'foo'}]:
             with self.assertRaises(server.APIError):
                 traceview.list_traces({**self.payload,'mapping':mapping},server)

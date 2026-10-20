@@ -21,7 +21,7 @@ from urllib.parse import unquote, urlsplit
 BASE_DIR = Path(__file__).resolve().parent
 PUBLIC_DIR = BASE_DIR / "public"
 CACHE_DIR = BASE_DIR / ".cache"
-VERSION = "2.1"
+VERSION = "2.2"
 MAX_BODY_BYTES = 1024 * 1024
 MAX_PAGE_SIZE = 200
 SCAN_LOCK = threading.Lock()
@@ -840,7 +840,7 @@ class Handler(BaseHTTPRequestHandler):
                                      "demo_root": str(BASE_DIR / "demo-data"), "version": VERSION,
                                      "chat_demo_root": str(BASE_DIR / "chat-demo-data"),
                                      "trace_demo_root": str(BASE_DIR / "trace-demo-data"),
-                                     "capabilities": ["field_filters", "conversations", "deduplicate", "traces", "otel_semantics"]})
+                                     "capabilities": ["field_filters", "conversations", "deduplicate", "traces", "otel_semantics", "trace_query_cache"]})
                 return
             if path.startswith("/api/"):
                 raise APIError("接口不存在。", 404)

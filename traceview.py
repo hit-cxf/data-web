@@ -2,6 +2,7 @@
 import hashlib
 import json
 import math
+import time
 import conversation
 
 PATHS = ('trace', 'span', 'parent', 'name', 'start', 'duration', 'service', 'host', 'status',
@@ -25,6 +26,18 @@ def initialize(conn):
             PRIMARY KEY(config_id,record_id));
         CREATE INDEX IF NOT EXISTS trace_key_idx ON trace_spans(config_id,trace_key);
         CREATE INDEX IF NOT EXISTS trace_record_idx ON trace_spans(record_id);
+        CREATE INDEX IF NOT EXISTS trace_record_config_idx ON trace_spans(record_id,config_id);
+        CREATE TABLE IF NOT EXISTS trace_query_cache (
+            cache_key TEXT PRIMARY KEY,scan_id TEXT NOT NULL,created REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS trace_group_results (
+            cache_key TEXT NOT NULL REFERENCES trace_query_cache(cache_key) ON DELETE CASCADE,
+            trace_key TEXT NOT NULL,trace_id TEXT,count INTEGER,raw_count INTEGER,
+            first REAL,last REAL,errors INTEGER,services INTEGER,hosts INTEGER,name TEXT,
+            missing_time INTEGER,missing_span_id INTEGER,elapsed REAL,
+            PRIMARY KEY(cache_key,trace_key));
+        CREATE INDEX IF NOT EXISTS trace_groups_time_idx ON trace_group_results(cache_key,first DESC,trace_key);
+        CREATE INDEX IF NOT EXISTS trace_groups_size_idx ON trace_group_results(cache_key,count DESC,first DESC,trace_key);
+        CREATE INDEX IF NOT EXISTS trace_groups_duration_idx ON trace_group_results(cache_key,elapsed DESC,trace_key);
     ''')
 
 
@@ -135,14 +148,24 @@ def prepare(payload, b, full=False):
         scope['where'] += (' AND ' if scope['where'] else ' WHERE ') + 'r.id IN (SELECT record_id FROM trace_spans WHERE config_id=? AND trace_key=?)'
         scope['arguments'] += [identity, payload['trace_key']]
     cte = b.matched_cte(scope) + ''' , entries AS (
-        SELECT t.*,q.copies FROM selected q CROSS JOIN trace_spans t INDEXED BY trace_record_idx
+        SELECT t.*,q.copies FROM selected q CROSS JOIN trace_spans t INDEXED BY trace_record_config_idx
         WHERE t.record_id=q.id AND t.config_id=?) '''
     return scope, cte, scope['arguments'] + [identity]
 
 
 def list_traces(payload, b):
+    started = time.perf_counter()
     page, size = b.page_arguments(payload)
+    minimum = payload.get('min_spans', 1)
+    if type(minimum) is not int or not 1 <= minimum <= 10000000:
+        raise b.APIError('最少 Span 数必须为正整数。')
+    sort = payload.get('sort', 'recent')
+    orders = {'recent': 'first DESC,trace_key', 'spans_desc': 'count DESC,first DESC,trace_key',
+              'duration_desc': 'elapsed DESC,trace_key'}
+    if sort not in orders:
+        raise b.APIError('不支持的链路排序。')
     scope, cte, args = prepare(payload, b)
+    indexed_at = time.perf_counter()
     search = payload.get('search', '')
     if not isinstance(search, str) or len(search) > 1000:
         raise b.APIError('搜索关键词无效。')
@@ -150,7 +173,8 @@ def list_traces(payload, b):
         MIN(stamp) AS first,MAX(stamp+COALESCE(duration,0)) AS last,SUM(error) AS errors,
         COUNT(DISTINCT service) AS services,COUNT(DISTINCT host) AS hosts,
         COALESCE(MIN(CASE WHEN parent_id IS NULL OR parent_id='' OR parent_id='0000000000000000' THEN name END),MIN(name),'未命名操作') AS name,
-        SUM(CASE WHEN stamp IS NULL THEN 1 ELSE 0 END) AS missing_time
+        SUM(CASE WHEN stamp IS NULL THEN 1 ELSE 0 END) AS missing_time,
+        SUM(CASE WHEN span_id IS NULL OR span_id='' THEN 1 ELSE 0 END) AS missing_span_id
         FROM entries GROUP BY trace_key), filtered AS (SELECT * FROM groups'''
     if search:
         cte += ''' WHERE trace_key IN (SELECT trace_key FROM entries WHERE
@@ -158,18 +182,58 @@ def list_traces(payload, b):
             OR instr(lower(COALESCE(service,'')),lower(?))>0 OR instr(lower(COALESCE(host,'')),lower(?))>0)'''
         args += [search] * 4
     cte += ') '
+    # Pagination, sorting and the minimum-size toggle share a bounded disk cache.
+    # Only the first request for a scan/filter/mapping combination aggregates raw spans.
+    cache_key = hashlib.sha256(b.compact_json([scope['scan_id'], cte, args]).encode()).hexdigest()
     conn = b.connect()
     try:
         conn.execute('BEGIN')
         b.check_scan(conn, scope['scan_id'])
-        stats = dict(conn.execute(cte + '''SELECT COUNT(*) AS traces,COALESCE(SUM(count),0) AS spans,
+        hit = conn.execute('SELECT 1 FROM trace_query_cache WHERE cache_key=?', (cache_key,)).fetchone() is not None
+        if not hit:
+            # Release the read transaction before upgrading to a writer: another request
+            # may have built the same cache while this one was preparing its field indexes.
+            conn.rollback()
+            with b.SCAN_LOCK:
+                conn.execute('BEGIN IMMEDIATE')
+                b.check_scan(conn, scope['scan_id'])
+                hit = conn.execute('SELECT 1 FROM trace_query_cache WHERE cache_key=?', (cache_key,)).fetchone() is not None
+                if not hit:
+                    conn.execute('DELETE FROM trace_query_cache WHERE scan_id<>?', (scope['scan_id'],))
+                    conn.execute('INSERT INTO trace_query_cache VALUES (?,?,?)', (cache_key,scope['scan_id'],time.time()))
+                    conn.execute(cte + '''INSERT INTO trace_group_results
+                        SELECT ?,trace_key,trace_id,count,raw_count,first,last,errors,services,hosts,name,
+                        missing_time,missing_span_id,last-first FROM filtered''', args+[cache_key])
+                    conn.execute('''DELETE FROM trace_query_cache WHERE cache_key IN
+                        (SELECT cache_key FROM trace_query_cache ORDER BY created DESC,cache_key DESC LIMIT -1 OFFSET 3)''')
+                conn.commit()
+            conn.execute('BEGIN')
+            b.check_scan(conn, scope['scan_id'])
+        stats = dict(conn.execute('''SELECT COUNT(*) AS traces,COALESCE(SUM(count),0) AS spans,
             COALESCE(SUM(raw_count-count),0) AS duplicates,COALESCE(SUM(errors),0) AS errors,
-            MAX(last-first) AS longest FROM filtered''', args).fetchone())
+            MAX(elapsed) AS longest FROM trace_group_results WHERE cache_key=? AND count>=?''', (cache_key,minimum)).fetchone())
+        diagnostics = dict(conn.execute('''SELECT COUNT(*) AS traces,
+            COALESCE(SUM(CASE WHEN count=1 THEN 1 ELSE 0 END),0) AS single_traces,
+            COALESCE(SUM(CASE WHEN count=1 AND lower(name)='dns.lookup' THEN 1 ELSE 0 END),0) AS dns_single_traces,
+            COALESCE(SUM(CASE WHEN trace_id IS NULL THEN 1 ELSE 0 END),0) AS missing_trace_id,
+            COALESCE(SUM(missing_span_id),0) AS missing_span_id
+            FROM trace_group_results WHERE cache_key=?''', (cache_key,)).fetchone())
         total = stats['traces']
-        pages = math.ceil(total / size)
-        page = min(page, max(1, pages))
-        rows = conn.execute(cte + 'SELECT * FROM filtered ORDER BY first IS NULL,first DESC,trace_key LIMIT ? OFFSET ?', args + [size, (page-1)*size]).fetchall()
-        return {'items': [dict(row) for row in rows], 'stats': stats, 'total': total, 'page': page, 'pages': pages}
+        pages = math.ceil(total/size)
+        page = min(page,max(1,pages))
+        rows = conn.execute('SELECT * FROM trace_group_results WHERE cache_key=? AND count>=? ORDER BY '+orders[sort]+' LIMIT ? OFFSET ?',
+                            (cache_key,minimum,size,(page-1)*size)).fetchall()
+        items = []
+        for row in rows:
+            item = dict(row)
+            item.pop('cache_key',None)
+            items.append(item)
+        return {'items':items,'stats':stats,'diagnostics':diagnostics,'total':total,'page':page,'pages':pages,
+                'cache_hit':hit,'elapsed_ms':round((time.perf_counter()-started)*1000,1),
+                'index_ms':round((indexed_at-started)*1000,1)}
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 

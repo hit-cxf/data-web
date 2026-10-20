@@ -1,4 +1,4 @@
-# officeACE 链路工作台 · 2.1
+# officeACE 链路工作台 · 2.2
 
 本地运行的 Trace / Span 数据分析页面。新版本已替换原有的数据表格与对话页面，按链路结构组织回流数据。Python 3.9+，后端只使用标准库，前端无依赖；无需 npm、pip 或外网。
 
@@ -120,3 +120,16 @@ node --check public/trace.js
 参考：[OTel 资源语义](https://opentelemetry.io/docs/specs/semconv/resource/)、[JavaScript SDK SpanKind](https://open-telemetry.github.io/opentelemetry-js/enums/_opentelemetry_api._opentelemetry_api.SpanKind.html)、[OTLP Trace 定义](https://github.com/open-telemetry/opentelemetry-proto/blob/main/opentelemetry/proto/trace/v1/trace.proto)。
 
 语义展示测试：`node --test tests/test_otel.js`。
+
+
+## 2.2 · 单节点链路定位与查询加速
+
+- 增加「只看多节点链路」，按当前条件命中的记录数 ≥ 2 选择 Trace；打开后仍显示目录时间范围内的完整链路。
+- 列表支持最近优先、Span 数量最多、耗时最长三种排序。DNS 单节点不会默认被隐藏，也不会与不同 Trace ID 的记录合并。
+- 列表上方显示实际分组字段、单节点链路数、其中的独立 `dns.lookup` 数、缺失 Trace ID / Span ID 数。若 Trace ID 和 Span ID 映射到了同一字段，会提示检查。
+- 查询结果聚合一次后缓存在本地 SQLite，分页、排序、切换多节点选项复用聚合结果；最多保留 3 组查询条件，重新扫描自动失效。增加按记录和映射配置联合查找的索引。
+- 状态栏显示后端耗时及是否复用缓存。首次索引、首次使用新的字段筛选或查询条件仍需处理记录。
+
+如果 DNS 记录的 Trace ID 各不相同，按 Trace ID 展示时它们本来就是独立链路。是否有主业务链路，需在清空其他字段条件、放宽时间范围后查看多节点统计；不能仅按 host.name 把它们拼成一条 Trace。
+
+本机合成基准（475,975 条轻量记录，主要为独立 DNS Span，非真实公司数据）：扫描约 8.8 秒，首次索引及链路聚合约 6.7 秒，缓存后的列表查询约 80 毫秒。实际耗时受记录体积、磁盘和机器性能影响。7.2 万条相同合成数据的列表复查由旧实现约 200 毫秒降至约 9 毫秒。
