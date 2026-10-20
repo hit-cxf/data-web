@@ -21,7 +21,7 @@ from urllib.parse import unquote, urlsplit
 BASE_DIR = Path(__file__).resolve().parent
 PUBLIC_DIR = BASE_DIR / "public"
 CACHE_DIR = BASE_DIR / ".cache"
-VERSION = "1.2"
+VERSION = "2.1"
 MAX_BODY_BYTES = 1024 * 1024
 MAX_PAGE_SIZE = 200
 SCAN_LOCK = threading.Lock()
@@ -100,6 +100,8 @@ def initialize_database():
         conn.execute("CREATE INDEX IF NOT EXISTS record_fingerprint_idx ON records(fingerprint)")
         import conversation
         conversation.initialize(conn)
+        import traceview
+        traceview.initialize(conn)
 
 
 def fingerprint(record):
@@ -738,7 +740,8 @@ def record_details(payload):
             raise APIError("记录不存在。", 404)
         total = conn.execute("SELECT COUNT(*) FROM records WHERE fingerprint=?", (row["fingerprint"],)).fetchone()[0]
         copies = conn.execute("SELECT r.id,r.record_index,f.path FROM records r JOIN files f ON f.id=r.file_id WHERE r.fingerprint=? ORDER BY f.path,r.record_index LIMIT 200", (row["fingerprint"],)).fetchall()
-        return {"record": json.loads(row["document"]), "total": total,
+        return {"record": json.loads(row["document"]),
+                "raw_json": json.dumps(json.loads(row["document"]), ensure_ascii=False, indent=2), "total": total,
                 "copies": [{"id": str(item["id"]), "source": item["path"], "index": item["record_index"] + 1} for item in copies],
                 "has_more": total > len(copies)}
     finally:
@@ -788,7 +791,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             self.check_origin()
             endpoint = urlsplit(self.path).path
-            if endpoint not in ("/api/scan", "/api/query", "/api/record", "/api/conversations", "/api/conversation/messages"):
+            if endpoint not in ("/api/scan", "/api/query", "/api/record", "/api/conversations", "/api/conversation/messages", "/api/traces", "/api/trace/spans"):
                 raise APIError("接口不存在。", 404)
             if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
                 raise APIError("请求 Content-Type 应为 application/json。", 415)
@@ -810,6 +813,10 @@ class Handler(BaseHTTPRequestHandler):
                 result = query_data(payload)
             elif endpoint == "/api/record":
                 result = record_details(payload)
+            elif endpoint in ("/api/traces", "/api/trace/spans"):
+                import traceview
+                backend = sys.modules[__name__]
+                result = traceview.list_traces(payload, backend) if endpoint == "/api/traces" else traceview.waterfall(payload, backend)
             else:
                 import conversation
                 backend = sys.modules[__name__]
@@ -832,7 +839,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, {"default_root": self.server.default_root,
                                      "demo_root": str(BASE_DIR / "demo-data"), "version": VERSION,
                                      "chat_demo_root": str(BASE_DIR / "chat-demo-data"),
-                                     "capabilities": ["field_filters", "conversations", "deduplicate"]})
+                                     "trace_demo_root": str(BASE_DIR / "trace-demo-data"),
+                                     "capabilities": ["field_filters", "conversations", "deduplicate", "traces", "otel_semantics"]})
                 return
             if path.startswith("/api/"):
                 raise APIError("接口不存在。", 404)

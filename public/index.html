@@ -1,115 +1,20 @@
 <!doctype html>
 <html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light">
-  <title>officeACE · 数据浏览器</title>
-  <link rel="stylesheet" href="/styles.css">
-  <link rel="stylesheet" href="/conversation.css">
-  <script src="/app.js" defer></script>
-  <script src="/conversation.js" defer></script>
-</head>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><title>officeACE · 链路工作台</title><link rel="stylesheet" href="/trace.css"><script src="/otel.js" defer></script><script src="/trace.js" defer></script></head>
 <body>
-  <svg class="icon-definitions" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></symbol>
-    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M3 10h18"/></symbol>
-    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></symbol>
-    <symbol id="i-filter" viewBox="0 0 24 24"><path d="M4 5h16M7 12h10M10 19h4"/><circle cx="9" cy="5" r="2"/><circle cx="15" cy="12" r="2"/></symbol>
-    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
-    <symbol id="i-table" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M10 10v10"/></symbol>
-    <symbol id="i-code" viewBox="0 0 24 24"><path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-15-2 18"/></symbol>
-    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 15v5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5"/></symbol>
-    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
-    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H5a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V9ZM14 3v6h6M8 14h8M8 17h5"/></symbol>
-    <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 3 10 5-10 5L2 8Zm-9 9 9 5 9-5M3 16l9 5 9-5"/></symbol>
-    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
-    <symbol id="i-reset" viewBox="0 0 24 24"><path d="M3 10a9 9 0 1 1 2 8M3 4v6h6"/></symbol>
-    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v1"/></symbol>
-  </svg>
-  <header class="site-header">
-    <div class="brand"><div class="brand-mark"><svg><use href="#i-grid"/></svg></div><span class="brand-name">officeACE</span><span class="brand-divider">/</span><span class="brand-page">数据浏览器</span></div>
-    <nav class="page-switch" role="tablist" aria-label="页面切换"><button id="page-data" role="tab" aria-selected="true" aria-controls="data-page">数据浏览</button><button id="page-chat" role="tab" aria-selected="false" aria-controls="chat-page">对话回放</button></nav>
-    <div class="local-badge"><span></span> 本地工作空间</div>
-  </header>
-  <main id="data-page" role="tabpanel" aria-labelledby="page-data">
-    <div class="page-heading"><div><p class="eyebrow">DATA EXPLORER</p><h1>让回流数据，一目了然</h1><p class="page-description">按时间定位记录，筛选关键参数，自由查看每一层数据。</p></div><span class="format-badge"><span>目录格式</span><code>dd / hh / mm / *.json</code></span></div>
-
-    <section class="card source-card" aria-labelledby="source-heading">
-      <div class="section-title"><svg class="icon"><use href="#i-folder"/></svg><h2 id="source-heading">数据目录</h2><span id="source-state" class="tag neutral">尚未连接</span></div>
-      <form id="source-form" class="source-form">
-        <div class="path-input-wrap"><svg class="icon"><use href="#i-folder"/></svg><input id="root-path" type="text" autocomplete="off" spellcheck="false" aria-label="数据根目录" placeholder="输入本机数据根目录的绝对路径，例如 /data/officeACE"></div>
-        <button class="button primary" id="scan-button" type="submit"><svg class="icon"><use href="#i-search"/></svg>扫描目录</button>
-        <button class="button secondary" id="demo-button" type="button">体验示例数据</button>
-      </form>
-      <div class="source-note"><span>选择包含日 / 时 / 分子目录的根目录，路径可随时更换。</span><span id="scan-detail">文件在本机处理</span></div>
-    </section>
-
-    <div class="stat-grid" aria-label="数据概览">
-      <div class="stat-card"><div class="stat-icon teal"><svg class="icon"><use href="#i-layers"/></svg></div><div><div class="stat-label">已加载记录</div><div class="stat-value" id="stat-records">—</div></div><span class="stat-caption">条</span></div>
-      <div class="stat-card"><div class="stat-icon blue"><svg class="icon"><use href="#i-file"/></svg></div><div><div class="stat-label">JSON 文件</div><div class="stat-value" id="stat-files">—</div></div><span class="stat-caption">个</span></div>
-      <div class="stat-card"><div class="stat-icon purple"><svg class="icon"><use href="#i-code"/></svg></div><div><div class="stat-label">发现字段</div><div class="stat-value" id="stat-fields">—</div></div><span class="stat-caption">含嵌套层级</span></div>
-    </div>
-
-    <section class="card filter-card" aria-labelledby="filter-heading">
-      <div class="filter-heading"><div class="section-title"><svg class="icon"><use href="#i-filter"/></svg><h2 id="filter-heading">筛选条件</h2></div><button id="reset-filters" class="text-button" type="button"><svg class="icon"><use href="#i-reset"/></svg>重置条件</button></div>
-      <form id="filter-form">
-        <div class="time-filter"><div class="filter-label"><svg class="icon"><use href="#i-clock"/></svg><span>文件时间区间</span><span class="muted">包含起止分钟</span></div><div class="time-controls"><div class="time-endpoint"><span class="endpoint-label">从</span><label><input id="from-day" type="number" min="1" max="31" placeholder="DD" aria-label="起始日"><span>日</span></label><label><input id="from-hour" type="number" min="0" max="23" placeholder="HH" aria-label="起始小时"><span>时</span></label><label><input id="from-minute" type="number" min="0" max="59" placeholder="MM" aria-label="起始分钟"><span>分</span></label></div><span class="time-dash">→</span><div class="time-endpoint"><span class="endpoint-label">至</span><label><input id="to-day" type="number" min="1" max="31" placeholder="DD" aria-label="结束日"><span>日</span></label><label><input id="to-hour" type="number" min="0" max="23" placeholder="HH" aria-label="结束小时"><span>时</span></label><label><input id="to-minute" type="number" min="0" max="59" placeholder="MM" aria-label="结束分钟"><span>分</span></label></div><span id="available-time" class="available-time">未设置时查询全部文件</span></div></div>
-        <div class="arbitrary-filters">
-          <div class="condition-heading"><div><h3>字段筛选</h3><p>选择完整路径后输入关键字，支持任意层级与数组。多个条件同时满足。</p></div><button id="add-filter" class="button small secondary" type="button" disabled>＋ 添加条件</button></div>
-          <div id="field-filters" class="filter-rules"><p class="muted">扫描数据目录后，即可选择筛选字段。</p></div>
-          <div class="filter-actions"><div><label class="dedupe-control"><input id="dedupe-records" type="checkbox">过滤相同记录 <span>按完整 JSON 内容，不修改源文件</span></label><p>“包含”不区分大小写。首次筛选某个字段时会建立本地索引，请稍候。</p></div><button id="query-button" class="button primary apply-button" type="submit" disabled><svg class="icon"><use href="#i-filter"/></svg>应用筛选</button></div>
-        </div>
-      </form>
-    </section>
-
-    <div id="message" class="message" role="status" aria-live="polite" hidden></div>
-    <details id="warnings" class="warnings" hidden><summary id="warnings-summary"></summary><ul id="warnings-list"></ul></details>
-
-    <div class="workspace">
-      <aside class="card field-card" aria-labelledby="fields-heading">
-        <div class="field-heading"><div class="section-title"><svg class="icon"><use href="#i-layers"/></svg><h2 id="fields-heading">展示字段</h2></div><span id="selected-count" class="count-badge">0</span></div>
-        <p class="field-help">勾选父级可选择其下全部字段</p>
-        <div class="field-search"><svg class="icon"><use href="#i-search"/></svg><input id="field-search" type="search" placeholder="搜索字段…" aria-label="搜索展示字段"></div>
-        <div class="field-actions"><button id="select-all" type="button" class="text-button">全选</button><button id="select-defaults" type="button" class="text-button">常用字段</button><button id="select-none" type="button" class="text-button">清空</button><button id="collapse-tree" type="button" class="text-button collapse-button" aria-label="折叠所有字段">折叠</button></div>
-        <div id="field-tree" class="field-tree"><div class="field-empty">扫描目录后<br>在这里选择需要展示的字段</div></div>
-        <div class="field-footer"><span class="tiny-dot"></span> 支持对象与数组的逐层选择</div>
-      </aside>
-
-      <section class="card results-card" aria-labelledby="results-heading">
-        <div class="results-heading"><div><div class="results-title-line"><h2 id="results-heading">查询结果</h2><span id="result-count" class="tag neutral">等待加载</span></div><p id="result-detail" class="result-detail">连接数据目录，开始探索回流记录</p></div><button id="export-button" class="button small secondary" type="button" disabled><svg class="icon"><use href="#i-download"/></svg>导出当前页 JSON</button></div>
-        <div class="result-toolbar"><div class="view-tabs" role="tablist" aria-label="结果视图"><button id="table-tab" class="view-tab active" role="tab" aria-selected="true" aria-controls="table-panel" type="button"><svg class="icon"><use href="#i-table"/></svg>表格</button><button id="json-tab" class="view-tab" role="tab" aria-selected="false" aria-controls="json-panel" type="button"><svg class="icon"><use href="#i-code"/></svg>JSON</button></div><label class="sort-control"><span>排列</span><select id="sort-order" aria-label="文件时间排序"><option value="time_desc">时间从新到旧</option><option value="time_asc">时间从旧到新</option></select></label></div>
-        <div id="selected-chips" class="selected-chips"><span class="muted">尚未选择展示字段</span></div>
-        <div id="results-body" class="results-body" aria-busy="false">
-          <div id="empty-state" class="empty-state"><div class="empty-illustration"><svg><use href="#i-folder"/></svg><span class="illustration-dot"></span></div><h3>从一个数据目录开始</h3><p>输入本机目录并扫描，或加载示例数据体验。<br>你的数据只在本地服务中读取和处理。</p></div>
-          <div id="table-panel" class="table-panel" role="tabpanel" aria-labelledby="table-tab" hidden><table id="results-table"><thead></thead><tbody></tbody></table></div>
-          <div id="json-panel" class="json-panel" role="tabpanel" aria-labelledby="json-tab" hidden><pre id="json-output"></pre></div>
-        </div>
-        <div class="pagination"><div class="page-size-control"><span>每页</span><select id="page-size" aria-label="每页记录数"><option value="25">25</option><option value="50" selected>50</option><option value="100">100</option><option value="200">200</option></select><span>条</span></div><span id="page-summary" class="page-summary">暂无记录</span><div class="page-buttons"><button id="previous-page" class="icon-button" aria-label="上一页" disabled><svg class="icon reverse"><use href="#i-chevron"/></svg></button><span id="page-indicator">0 / 0</span><button id="next-page" class="icon-button" aria-label="下一页" disabled><svg class="icon"><use href="#i-chevron"/></svg></button></div></div>
-      </section>
-    </div>
-    <footer class="page-footer"><span>officeACE <span class="footer-divider">·</span> 本地数据工作台</span><span>按需筛选 · 逐层查看</span></footer>
-  </main>
-  <section id="chat-page" class="chat-page" role="tabpanel" aria-labelledby="page-chat" hidden>
-    <div class="chat-topbar"><div><strong>对话回放</strong><span id="chat-source">先在数据浏览页扫描目录</span></div><div class="chat-top-actions"><button id="chat-demo" class="button secondary small">对话示例</button><button id="chat-settings-button" class="button secondary small">字段与筛选配置</button><button id="chat-load" class="button primary small" disabled>载入对话</button></div></div>
-    <p id="chat-notice" class="chat-notice" role="status" aria-live="polite">根据主机分组，按消息时间顺序回放。请先连接数据目录。</p>
-    <div class="chat-layout">
-      <aside class="chat-sidebar" aria-label="主机与对话列表"><div class="chat-sidebar-heading"><h2>对话</h2><span id="chat-group-count">—</span></div><input id="chat-search" type="search" placeholder="搜索主机 / 会话 ID" aria-label="搜索对话"><div id="chat-groups" class="chat-groups"><p class="chat-placeholder">载入记录后，这里会按主机显示对话。</p></div><button id="chat-more-groups" class="button secondary small" hidden>加载更多对话</button></aside>
-      <section class="chat-window" aria-label="对话窗口"><header class="conversation-heading"><div><h2 id="chat-title">选择一个对话</h2><p id="chat-subtitle">用户消息在右侧，agent 与工具记录在左侧。</p></div><span class="read-only-badge">只读回放</span></header><div id="chat-messages" class="conversation-messages" aria-live="polite"><div class="chat-welcome"><svg class="icon"><use href="#i-layers"/></svg><h3>把回流记录还原成对话</h3><p>在配置中选择主机、时间、角色与内容字段，<br>并按字段是否存在、字段值来筛选记录。</p><button id="chat-welcome-settings" class="button secondary">配置对话字段</button></div></div><footer class="chat-message-footer"><span id="chat-message-count">完整保留内容 · 工具详情默认收起</span><button id="chat-more-messages" class="button secondary small" hidden>载入后续消息</button></footer></section>
-    </div>
-  </section>
-  <dialog id="chat-config-dialog" class="chat-config-dialog" aria-labelledby="chat-config-title"><form id="chat-config-form">
-    <div class="chat-config-heading"><div><h2 id="chat-config-title">对话字段与筛选配置</h2><p>根据你的 JSON 结构选择完整路径；配置保存在当前浏览器。</p></div><button id="chat-config-close" class="icon-button" type="button" aria-label="关闭对话配置">×</button></div>
-    <div class="chat-config-body"><h3>字段映射</h3><div id="chat-mappings" class="chat-mappings"></div>
-      <div class="chat-units"><label for="chat-time-unit">时间戳单位</label><select id="chat-time-unit"><option value="auto">自动识别 Unix 单位 / ISO 日期</option><option value="s">秒</option><option value="ms">毫秒</option><option value="us">微秒</option><option value="ns">纳秒</option></select></div>
-      <p class="chat-config-help">不选会话 ID 时，每台主机为一个对话；选择后按“主机 + 会话 ID”拆分。消息列表字段留空时，一条记录是一条消息；记录含消息数组时，先选择数组，再为角色、内容和时间选择数组内路径。缺失或无效时间的消息保留并排在最后。</p>
-      <h3>角色取值（逗号分隔）</h3><div class="chat-role-values"><label>用户<input id="chat-user-values" type="text" value="user, human"></label><label>Agent<input id="chat-agent-values" type="text" value="assistant, agent, ai"></label><label>工具<input id="chat-tool-values" type="text" value="tool, function, tool_call, tool_result"></label></div>
-      <div class="condition-heading"><div><h3>按字段识别消息类型（可选）</h3><p>没有统一角色字段时，可按字段是否存在或字段值识别用户、Agent、工具，并为该类型指定正文。按规则顺序判断，首次命中生效，优先于角色取值。</p></div><button id="chat-add-kind" type="button" class="button secondary small">＋ 类型规则</button></div><div id="chat-kind-rules"></div>
-      <h3>目录时间区间</h3><div id="chat-time-fields" class="time-controls"></div>
-      <div class="condition-heading chat-condition-heading"><div><h3>记录筛选</h3><p>“存在”保留包含该字段的记录；“包含 / 等于”进一步匹配字段值。条件同时生效。</p></div><button id="chat-add-filter" class="button small secondary" type="button">＋ 添加条件</button></div><div id="chat-field-filters" class="filter-rules"></div>
-      <label class="dedupe-control chat-dedupe"><input id="chat-deduplicate" type="checkbox" checked>过滤完整内容相同的记录</label><p class="chat-config-help">筛选作用于原始记录。记录含消息数组时，会保留匹配记录中的全部消息。正文留空时展示完整消息 JSON；工具详情和附件原始内容均可展开查看。</p>
-      <p id="chat-config-error" class="chat-config-error" role="alert" hidden></p>
-    </div><div class="chat-config-footer"><button id="chat-reset-config" class="text-button" type="button">恢复自动映射</button><button class="button primary" type="submit">应用配置并载入</button></div>
-  </form></dialog>
-</body>
-</html>
+<header class="topbar"><a class="brand" href="/" aria-label="officeACE 首页"><span class="brand-icon">a<span>↗</span></span><strong>officeACE</strong><span class="brand-slash">/</span><span class="brand-sub">链路工作台</span></a><div class="header-actions"><span class="local"><i></i> 本地数据 · 离线可用</span><button id="mapping-open" class="button subtle">字段映射</button><button id="source-open" class="button dark">连接数据目录 <span>↗</span></button></div></header>
+<main>
+<section class="intro"><div><div class="eyebrow">TRACE EXPLORER <span> / </span> 观测每一次执行</div><h1>从一次请求，看清整条链路<span>.</span></h1><p>沿着时间与调用关系，定位耗时、异常和每一个执行细节。</p></div><div class="source-summary"><span class="tiny-label">当前数据源</span><button id="source-label" title="更换数据目录">尚未连接 <span>↗</span></button><span id="scan-info">支持 dd / hh / mm / *.json</span></div></section>
+<section class="metrics" aria-label="链路概览"><div><span class="metric-icon">↔</span><section><span>匹配链路</span><strong id="metric-traces">—</strong></section><small>TRACE</small></div><div><span class="metric-icon mint">≋</span><section><span>命中 Span</span><strong id="metric-spans">—</strong></section><small>SPAN</small></div><div><span class="metric-icon rose">!</span><section><span>异常 Span</span><strong id="metric-errors">—</strong></section><small>ERROR</small></div><div><span class="metric-icon sand">◷</span><section><span>最长链路耗时</span><strong id="metric-duration">—</strong></section><small>DURATION</small></div></section>
+<section class="toolbar"><div class="search-wrap"><span>⌕</span><input id="search" type="search" placeholder="搜索 Trace ID、操作、服务或主机" aria-label="搜索链路"></div><button id="filters-open" class="button"><span>☷</span> 筛选条件 <b id="filter-count">0</b></button><label class="dedupe"><input id="deduplicate" type="checkbox" checked>过滤相同记录</label><button id="refresh" class="button subtle" title="重新查询当前扫描的数据">↻ 刷新</button></section>
+<div class="status-line"><span id="status" role="status">连接本机数据目录，或载入示例开始探索。</span><button id="demo-button" class="link-button">载入示例 →</button></div>
+<section class="workspace" aria-label="链路分析工作区">
+<aside class="trace-list-panel"><div class="panel-title"><h2>链路列表 <span id="list-count">0</span></h2><span class="tiny-label">最近优先 ↓</span></div><div id="trace-list" class="trace-list"><div class="empty compact"><span class="empty-symbol">⌕</span><h3>等待连接数据</h3><p>在本地建立索引后<br>即可按条件探索链路</p></div></div><div class="list-pagination"><button id="prev" class="icon-button" aria-label="上一页" disabled>←</button><span id="list-page">0 / 0</span><button id="next" class="icon-button" aria-label="下一页" disabled>→</button></div></aside>
+<section class="waterfall-panel"><div id="trace-heading" class="trace-heading"><div><span class="eyebrow">TRACE TIMELINE</span><h2 id="trace-title">链路时间瀑布图</h2><div id="trace-id" class="mono muted">选择左侧链路，查看执行过程</div></div><button id="expand-all" class="button subtle" hidden>展开全部</button></div><div id="trace-summary" class="trace-summary" hidden></div><div id="trace-warnings" class="trace-warnings" hidden></div><div class="waterfall-tools" id="waterfall-tools" hidden><div id="service-legend" class="legend"></div><label>缩放 <select id="zoom"><option value="1">100%</option><option value="2">200%</option><option value="4">400%</option></select></label></div><div id="waterfall-scroll" class="waterfall-scroll"><div id="waterfall" class="waterfall"><div class="empty"><span class="empty-symbol timeline-symbol">▰<br>　▰<br>　　▰</span><h3>让每次调用都有迹可循</h3><p>横向查看时间，纵向追踪调用层级<br>点击 Span，展开它的属性与事件</p><button id="empty-demo" class="button">体验示例链路 ↗</button></div></div></div><button id="more-spans" class="load-more" hidden>加载更多 Span</button><footer class="waterfall-footer"><span><i class="legend-dot"></i> Span 耗时　 <i class="event-dot"></i> Span 事件</span><span id="span-count">尚未选择链路</span></footer></section>
+<aside id="detail" class="detail-panel"><div class="panel-title"><h2>Span 详情</h2><button id="detail-close" class="icon-button" aria-label="关闭详情">×</button></div><div id="detail-content"><div class="empty compact"><span class="empty-symbol">⊞</span><h3>深入一个 Span</h3><p>选择时间轴中的任意调用<br>查看参数、事件和原始记录</p></div></div></aside>
+</section><footer class="page-footer"><span>officeACE <span class="muted">/</span> Trace workspace</span><span>列表按条件命中 · 时间轴展示所选目录区间内的完整链路</span></footer>
+</main>
+<dialog id="source-dialog"><form id="source-form"><div class="dialog-heading"><div><span class="eyebrow">LOCAL DATA</span><h2>连接数据目录</h2></div><button type="button" class="icon-button close-dialog" aria-label="关闭">×</button></div><p class="muted">输入运行本服务的电脑上的数据根目录。目录结构为日 / 时 / 分 / JSON 文件。</p><label class="field-label" for="root-path">本机目录绝对路径</label><input id="root-path" class="full-input" required placeholder="例如 /data/officeACE" autocomplete="off"><div class="note">扫描建立本地索引。再次扫描只更新新增或变动的文件。</div><div id="source-error" class="error" role="alert"></div><div class="dialog-footer"><button type="button" id="source-demo" class="button">使用示例数据</button><button type="submit" id="scan-button" class="button dark">扫描并连接 →</button></div></form></dialog>
+<dialog id="mapping-dialog" class="wide-dialog"><form id="mapping-form"><div class="dialog-heading"><div><span class="eyebrow">SCHEMA MAPPING</span><h2>字段映射</h2></div><button type="button" class="icon-button close-dialog" aria-label="关闭">×</button></div><p class="muted">将实际字段对应到链路结构。路径按层级显示，带引号的点号字段是完整键名。</p><div id="mapping-fields" class="mapping-grid"></div><div class="mapping-grid unit-grid"><label>开始时间单位<select id="time-unit"><option value="auto">自动识别 / ISO 时间</option><option value="s">秒 s</option><option value="ms">毫秒 ms</option><option value="us">微秒 μs</option><option value="ns">纳秒 ns</option></select></label><label>duration 单位<select id="duration-unit"><option value="ns">纳秒 ns</option><option value="us">微秒 μs</option><option value="ms">毫秒 ms</option><option value="s">秒 s</option></select></label><label>Span 类型编码<select id="kind-encoding"><option value="auto">未确认（仅解读文字类型）</option><option value="js">Node.js / JavaScript SDK</option><option value="otlp">OTLP 协议</option></select></label></div><div class="note">SDK 语言不能确定导出后的类型编码。数字 spanKind 需选择对应编码，避免客户端 / 服务端误判。duration 的单位无法仅凭数值可靠判断，默认采用纳秒，请根据数据格式确认。缺少 Span ID 时仍可查看时间分布，但无法完整还原父子关系。ts 的含义尚未确定，不自动代替 start。</div><div class="dialog-footer"><button type="button" id="mapping-reset" class="button">自动匹配字段</button><button class="button dark" type="submit">应用映射 →</button></div></form></dialog>
+<dialog id="filter-dialog" class="wide-dialog"><form id="filter-form"><div class="dialog-heading"><div><span class="eyebrow">REFINE YOUR SEARCH</span><h2>筛选条件</h2></div><button type="button" class="icon-button close-dialog" aria-label="关闭">×</button></div><h3 class="section-label">目录时间范围 <small>包含起止分钟；留空表示不限</small></h3><div class="time-range"><label>起点<span><input id="from-day" type="number" min="1" max="31" placeholder="日" aria-label="起始日"><em>/</em><input id="from-hour" type="number" min="0" max="23" placeholder="时" aria-label="起始小时"><em>/</em><input id="from-minute" type="number" min="0" max="59" placeholder="分" aria-label="起始分钟"></span></label><b>→</b><label>终点<span><input id="to-day" type="number" min="1" max="31" placeholder="日" aria-label="结束日"><em>/</em><input id="to-hour" type="number" min="0" max="23" placeholder="时" aria-label="结束小时"><em>/</em><input id="to-minute" type="number" min="0" max="59" placeholder="分" aria-label="结束分钟"></span></label></div><h3 class="section-label">字段条件 <small>所有条件同时满足；支持任意嵌套字段</small></h3><div id="filter-rules"></div><button id="add-rule" class="button subtle" type="button">＋ 添加字段条件</button><div class="note">条件用于查找包含匹配记录的 Trace。打开后显示该 Trace 在目录时间范围内的全部 Span，保留调用上下文。去重依据完整记录内容，字段顺序不影响结果。</div><div id="filter-error" class="error" role="alert"></div><div class="dialog-footer"><button id="filter-reset" type="button" class="button">清空条件</button><button class="button dark" type="submit">应用筛选 →</button></div></form></dialog>
+</body></html>

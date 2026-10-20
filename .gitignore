@@ -4,3 +4,20 @@ __pycache__/
 .DS_Store
 demo-data/
 chat-demo-data/
+trace-demo-data/
+
+# 本地打包产物
+/dist/
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+
+# 界面验证时生成的临时截图（保留正式文档）
+/screenshots/
+/docs/**/*.png
+/docs/**/*.jpg
+/docs/**/*.jpeg
+/docs/**/*.webp
