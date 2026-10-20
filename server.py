@@ -20,7 +20,7 @@ from urllib.parse import unquote, urlsplit
 BASE_DIR = Path(__file__).resolve().parent
 PUBLIC_DIR = BASE_DIR / "public"
 CACHE_DIR = BASE_DIR / ".cache"
-VERSION = "1.0"
+VERSION = "1.1"
 MAX_BODY_BYTES = 1024 * 1024
 MAX_PAGE_SIZE = 200
 SCAN_LOCK = threading.Lock()
@@ -74,6 +74,25 @@ def initialize_database():
             CREATE INDEX IF NOT EXISTS record_start_idx ON records(start_kind,start_number);
             CREATE INDEX IF NOT EXISTS record_host_idx ON records(host_text);
             CREATE INDEX IF NOT EXISTS record_user_idx ON records(user_text);
+            CREATE TABLE IF NOT EXISTS field_paths (
+                id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE
+            );
+            CREATE TABLE IF NOT EXISTS field_cache (
+                file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                path_id INTEGER NOT NULL REFERENCES field_paths(id),
+                PRIMARY KEY(file_id,path_id)
+            );
+            CREATE TABLE IF NOT EXISTS field_values (
+                path_id INTEGER NOT NULL REFERENCES field_paths(id),
+                record_id INTEGER NOT NULL REFERENCES records(id) ON DELETE CASCADE,
+                ordinal INTEGER NOT NULL,
+                value_text TEXT NOT NULL, value_fold TEXT NOT NULL,
+                value_kind TEXT, value_number REAL,
+                PRIMARY KEY(path_id,record_id,ordinal)
+            );
+            CREATE INDEX IF NOT EXISTS field_record_idx ON field_values(record_id);
+            CREATE INDEX IF NOT EXISTS field_text_idx ON field_values(path_id,value_text,record_id);
+            CREATE INDEX IF NOT EXISTS field_number_idx ON field_values(path_id,value_kind,value_number,record_id);
         """)
 
 
@@ -451,6 +470,133 @@ def filter_clause(filters, conditions, arguments):
                 arguments.append(value.casefold())
 
 
+def prepare_field_filters(settings):
+    """Paths are token arrays: a literal 'host.name' key is never split on dots."""
+    if not isinstance(settings, list) or len(settings) > 20:
+        raise APIError("field_filters 应为数组，最多支持 20 个筛选条件。")
+    result = []
+    for index, setting in enumerate(settings, 1):
+        label = "第 %d 个字段筛选" % index
+        if not isinstance(setting, dict):
+            raise APIError(label + " 必须为对象。")
+        path = setting.get("path")
+        if (not isinstance(path, list) or not 1 <= len(path) <= 128 or
+                any(not isinstance(part, str) or len(part) > 1024 for part in path)):
+            raise APIError(label + " 的 path 必须为完整字段路径的字符串数组。")
+        operator = setting.get("operator", "contains")
+        if operator not in ("contains", "equals", "between"):
+            raise APIError(label + " 筛选方式无效。")
+        rule = {"path": tuple(path), "operator": operator}
+        if operator == "between":
+            lower = range_value(setting.get("from", ""), label + " 起点")
+            upper = range_value(setting.get("to", ""), label + " 终点")
+            if lower and upper:
+                if lower[0] != upper[0]:
+                    raise APIError(label + " 两端应同时为数字或同时为 ISO 日期。")
+                if lower[1] > upper[1]:
+                    raise APIError(label + " 起点不能晚于终点。")
+            if not lower and not upper:
+                continue
+            rule.update(lower=lower, upper=upper)
+        else:
+            value = text_argument(setting.get("value", ""), label)
+            if value == "":
+                continue
+            rule["value"] = value
+        result.append(rule)
+    return result
+
+
+def path_values(document, path):
+    stack = [(document, 0)]
+    while stack:
+        value, depth = stack.pop()
+        if depth == len(path):
+            yield value
+        elif path[depth] == "[]" and isinstance(value, list):
+            stack.extend((item, depth + 1) for item in reversed(value))
+        elif isinstance(value, dict) and path[depth] in value:
+            stack.append((value[path[depth]], depth + 1))
+
+
+def ensure_field_indexes(scan_id, paths, file_conditions, file_arguments):
+    """Index requested paths once per file; old indexes cascade away on rescan.
+
+    Work stays in bounded batches and uses the existing cached documents, so an
+    upgrade does not require re-reading source files or sending records to the UI.
+    """
+    paths = list(dict.fromkeys(paths))
+    if not paths:
+        return {}
+    with SCAN_LOCK:
+        conn = connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            if metadata(conn, "scan_id") != scan_id:
+                raise APIError("数据索引已更新，请重新扫描目录。", 409)
+            path_ids = {}
+            for path in paths:
+                encoded = compact_json(list(path))
+                conn.execute("INSERT OR IGNORE INTO field_paths(path) VALUES (?)", (encoded,))
+                path_ids[path] = conn.execute("SELECT id FROM field_paths WHERE path=?", (encoded,)).fetchone()[0]
+            where = " WHERE " + " AND ".join(file_conditions) if file_conditions else ""
+            files = conn.execute("SELECT f.id,f.fields_json FROM files f" + where, file_arguments).fetchall()
+            for file in files:
+                cached = {row[0] for row in conn.execute("SELECT path_id FROM field_cache WHERE file_id=?", (file["id"],))}
+                missing = [path for path in paths if path_ids[path] not in cached]
+                if not missing:
+                    continue
+                schema = {tuple(field["path"]) for field in json.loads(file["fields_json"])}
+                present = [path for path in missing if path in schema]
+                batch = []
+                if present:
+                    for row in conn.execute("SELECT id,document FROM records WHERE file_id=?", (file["id"],)):
+                        document = json.loads(row["document"])
+                        for path in present:
+                            for ordinal, value in enumerate(path_values(document, path)):
+                                text = "null" if value is None else value_text(value)
+                                kind, number = indexed_start(text)
+                                batch.append((path_ids[path], row["id"], ordinal, text, text.casefold(), kind, number))
+                                if len(batch) >= 2000:
+                                    conn.executemany("INSERT INTO field_values VALUES (?,?,?,?,?,?,?)", batch)
+                                    batch.clear()
+                    if batch:
+                        conn.executemany("INSERT INTO field_values VALUES (?,?,?,?,?,?,?)", batch)
+                conn.executemany("INSERT INTO field_cache(file_id,path_id) VALUES (?,?)",
+                                 [(file["id"], path_ids[path]) for path in missing])
+            conn.commit()
+            return path_ids
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+
+def field_filter_clauses(rules, path_ids, conditions, arguments):
+    for rule in rules:
+        predicates = ["v.path_id=?"]
+        values = [path_ids[rule["path"]]]
+        if rule["operator"] == "between":
+            lower, upper = rule["lower"], rule["upper"]
+            predicates.append("v.value_kind=?")
+            values.append((lower or upper)[0])
+            if lower:
+                predicates.append("v.value_number>=?")
+                values.append(lower[1])
+            if upper:
+                predicates.append("v.value_number<=?")
+                values.append(upper[1])
+        elif rule["operator"] == "equals":
+            predicates.append("v.value_text=?")
+            values.append(rule["value"])
+        else:
+            predicates.append("instr(v.value_fold,?)>0")
+            values.append(rule["value"].casefold())
+        conditions.append("r.id IN (SELECT v.record_id FROM field_values v WHERE " + " AND ".join(predicates) + ")")
+        arguments.extend(values)
+
+
 def query_data(payload):
     started = time.perf_counter()
     scan_id = payload.get("scan_id")
@@ -480,6 +626,9 @@ def query_data(payload):
     conditions = list(file_conditions)
     arguments = list(file_arguments)
     filter_clause(payload.get("filters", {}), conditions, arguments)
+    field_rules = prepare_field_filters(payload.get("field_filters", []))
+    path_ids = ensure_field_indexes(scan_id, [rule["path"] for rule in field_rules], file_conditions, file_arguments)
+    field_filter_clauses(field_rules, path_ids, conditions, arguments)
     where = " WHERE " + " AND ".join(conditions) if conditions else ""
     file_where = " WHERE " + " AND ".join(file_conditions) if file_conditions else ""
     conn = connect()
@@ -589,7 +738,8 @@ class Handler(BaseHTTPRequestHandler):
             path = unquote(urlsplit(self.path).path)
             if path == "/api/status":
                 self.send_json(200, {"default_root": self.server.default_root,
-                                     "demo_root": str(BASE_DIR / "demo-data"), "version": VERSION})
+                                     "demo_root": str(BASE_DIR / "demo-data"), "version": VERSION,
+                                     "capabilities": ["field_filters"]})
                 return
             if path.startswith("/api/"):
                 raise APIError("接口不存在。", 404)

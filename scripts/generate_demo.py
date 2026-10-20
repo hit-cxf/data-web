@@ -32,6 +32,11 @@ def main():
                     "network": {"region": ["北京", "上海", "深圳"][sequence % 3]},
                 },
                 "user": {"id": "demo-user-{:03d}".format(sequence % 24 + 1), "department": ["研发", "产品", "测试"][sequence % 3]},
+                "resourceAttributes": {
+                    "host.name": hosts[sequence % len(hosts)],
+                    "user.id": "demo-user-{:03d}".format(sequence % 24 + 1),
+                    "service": {"name": "officeACE", "environment": "demo"},
+                },
                 "office": {
                     "application": app,
                     "version": "16.0.17928",

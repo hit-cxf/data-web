@@ -132,6 +132,104 @@ class DataWebIntegrationTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(b"<html", content.lower())
 
+    def test_arbitrary_field_filters_use_exact_nested_paths(self):
+        self.write_json("19/08/00/nested.json", [
+            {"name": "match", "start": 10, "resourceAttributes": {
+                "host.name": "Company-PC", "user.id": "employee-01",
+                "host": {"name": "different-nested-host"}}},
+            {"name": "other-user", "start": 20, "resourceAttributes": {
+                "host.name": "Company-PC", "user.id": "employee-02"}},
+            {"name": "wrong-level", "host.name": "Company-PC", "user.id": "employee-01"},
+        ])
+        scan_id = self.scan()["scan_id"]
+        filters = [
+            {"path": ["resourceAttributes", "host.name"], "operator": "contains", "value": "COMPANY"},
+            {"path": ["resourceAttributes", "user.id"], "operator": "equals", "value": "employee-01"},
+        ]
+        result = self.query(scan_id, field_filters=filters)
+        self.assertEqual(self.record_names(result), ["match"])
+        result = self.query(scan_id, field_filters=[{
+            "path": ["resourceAttributes", "host", "name"],
+            "operator": "equals", "value": "different-nested-host",
+        }])
+        self.assertEqual(self.record_names(result), ["match"])
+
+    def test_arbitrary_field_filters_expand_nested_arrays_and_preserve_scalar_types(self):
+        self.write_json("19/08/00/arrays.json", [
+            {"name": "match", "groups": [[{"attributes": {"user.id": "alice"}},
+                                         {"attributes": {"user.id": "bob"}}]],
+             "enabled": False, "score": 0, "nullable": None},
+            {"name": "other", "groups": [[{"attributes": {"user.id": "carol"}}]],
+             "enabled": True, "score": 12},
+            {"name": "missing", "groups": []},
+        ])
+        scan_id = self.scan()["scan_id"]
+        result = self.query(scan_id, field_filters=[
+            {"path": ["groups", "[]", "[]", "attributes", "user.id"], "value": "bob"},
+            {"path": ["enabled"], "operator": "equals", "value": "false"},
+            {"path": ["score"], "operator": "equals", "value": "0"},
+            {"path": ["nullable"], "operator": "equals", "value": "null"},
+        ])
+        self.assertEqual(self.record_names(result), ["match"])
+
+    def test_arbitrary_field_ranges_and_cached_rescan(self):
+        target = self.write_json("19/08/00/ranges.json", [
+            {"name": "low", "metrics": {"duration": 2, "timestamp": "2026-10-19T08:00:00Z"}},
+            {"name": "match", "metrics": {"duration": 10, "timestamp": "2026-10-19T17:00:00+08:00"}},
+            {"name": "high", "metrics": {"duration": 100, "timestamp": "invalid"}},
+        ])
+        filters = [
+            {"path": ["metrics", "duration"], "operator": "between", "from": "9", "to": "11"},
+            {"path": ["metrics", "timestamp"], "operator": "between", "from": "2026-10-19T09:00:00Z"},
+        ]
+        scan_id = self.scan()["scan_id"]
+        for _ in range(2):
+            self.assertEqual(self.record_names(self.query(scan_id, field_filters=filters)), ["match"])
+        target.write_text(json.dumps([{"name": "replacement", "metrics": {"duration": 200}}]))
+        scan_id = self.scan()["scan_id"]
+        self.assertEqual(self.query(scan_id, field_filters=filters)["total"], 0)
+
+    def test_arbitrary_field_filters_validate_paths_and_conditions(self):
+        self.write_json("19/08/00/data.json", [{"name": "value", "nested": {"key": "data"}}])
+        scan_id = self.scan()["scan_id"]
+        for invalid in [
+            "nested.key", [{"path": "nested.key", "value": "data"}],
+            [{"path": [], "value": "data"}], [{"path": ["nested", 1], "value": "data"}],
+            [{"path": ["nested"], "operator": "invalid", "value": "data"}],
+            [{"path": ["nested"], "value": 12}],
+            [{"path": ["nested"], "operator": "between", "from": "11", "to": "2"}],
+        ]:
+            status, result = self.request("POST", "/api/query", {"scan_id": scan_id, "field_filters": invalid})
+            self.assertEqual(status, 400, result)
+
+    def test_arbitrary_field_cache_expands_with_time_range_and_drops_deleted_files(self):
+        self.write_json("19/08/00/first.json", [{"name": "first", "resourceAttributes": {"host.name": "pc"}}])
+        second = self.write_json("19/09/00/second.json", [{"name": "second", "resourceAttributes": {"host.name": "pc"}}])
+        scan_id = self.scan()["scan_id"]
+        filters = [{"path": ["resourceAttributes", "host.name"], "value": "pc"}]
+        result = self.query(scan_id, time_from=[19, 8, 0], time_to=[19, 8, 0], field_filters=filters)
+        self.assertEqual(self.record_names(result), ["first"])
+        self.assertEqual(self.query(scan_id, field_filters=filters)["total"], 2)
+        # An unchanged scan retains useful indexes but issues a new scan token.
+        scan_id = self.scan()["scan_id"]
+        self.assertEqual(self.query(scan_id, field_filters=filters)["total"], 2)
+        second.unlink()
+        scan_id = self.scan()["scan_id"]
+        self.assertEqual(self.record_names(self.query(scan_id, field_filters=filters)), ["first"])
+
+    def test_arbitrary_field_keys_and_keywords_are_literal_and_arrays_do_not_duplicate_rows(self):
+        self.write_json("19/08/00/literal.json", [
+            {"name": "match", "attributes": {'odd"key.[x]': "O'Reilly_100%"}, "tags": ["same", "same"]},
+            {"name": "other", "attributes": {'odd"key.[x]': "O'ReillyX1000"}, "tags": ["different"]},
+        ])
+        scan_id = self.scan()["scan_id"]
+        result = self.query(scan_id, field_filters=[
+            {"path": ["attributes", 'odd"key.[x]'], "value": "_100%"},
+            {"path": ["tags", "[]"], "value": "same"},
+        ], page_size=1)
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(self.record_names(result), ["match"])
+
     def test_inclusive_time_range_is_chronological_across_days(self):
         for relative_path, name in [
             ("03/22/59/before.json", "before"),
