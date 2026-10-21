@@ -75,6 +75,20 @@ const Otel = (() => {
     if(!Array.isArray(value) || value.length!==2 || !value.every(Number.isInteger) || value[0]<0 || value[1]<0 || value[1]>=1e9) return null;
     const number=value[0]+value[1]/1e9; return Number.isFinite(number)?number:null;
   }
-  return {anyValue,attributes,semantic,status,spanKind,sdk,groups,hrtime};
+  function operation(name) {
+    const match=/^trajectory\.(\d{3})\.(user_message|assistant_message|tool_call|tool_result|session_started|done)$/.exec(String(name ?? ''));
+    if(match && Number(match[1])>0) {
+      const types={user_message:['user','用户输入'],assistant_message:['assistant','Agent 回复'],
+        tool_call:['tool','工具调用'],tool_result:['tool','工具调用 · 结果'],
+        session_started:['lifecycle','会话开始'],done:['lifecycle','执行结束']};
+      const [kind,label]=types[match[2]];
+      return {kind,label,type:match[2],sequence:match[1]};
+    }
+    const known={'POST /v1/messages':['request','接口请求'],'agent.execution':['agent','Agent 执行'],
+      'officeclaw.agent.invoke':['agent','Agent 入口'],'dns.lookup':['network','域名解析']};
+    if(Object.hasOwn(known,String(name))) {const [kind,label]=known[name];return {kind,label};}
+    return null;
+  }
+  return {anyValue,attributes,semantic,status,spanKind,sdk,groups,hrtime,operation};
 })();
 if (typeof module !== 'undefined' && module.exports) module.exports = Otel;

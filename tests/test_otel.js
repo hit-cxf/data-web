@@ -30,3 +30,16 @@ test('SDK high resolution time pairs validate nanoseconds',()=>{
  assert.equal(Otel.hrtime([1700000000,500000000]),1700000000.5);
  assert.equal(Otel.hrtime([1,1e9]),null);assert.equal(Otel.hrtime([true,0]),null);assert.equal(Otel.hrtime([1]),null);
 });
+
+test('trajectory names identify message, tool and lifecycle roles without guessing',()=>{
+ for(const [type,kind] of [['user_message','user'],['assistant_message','assistant'],['tool_call','tool'],['tool_result','tool'],['session_started','lifecycle'],['done','lifecycle']]) {
+  const result=Otel.operation(`trajectory.001.${type}`);assert.equal(result.kind,kind);assert.equal(result.type,type);assert.equal(result.sequence,'001');
+ }
+ for(const name of ['trajectory.000.user_message','trajectory.1.user_message','trajectory.001.unknown','user_message','trajectory.001.user_message.extra'])assert.equal(Otel.operation(name),null);
+});
+test('known execution, request and DNS spans have independent operation labels',()=>{
+ assert.equal(Otel.operation('POST /v1/messages').kind,'request');
+ assert.equal(Otel.operation('agent.execution').kind,'agent');
+ assert.equal(Otel.operation('officeclaw.agent.invoke').kind,'agent');
+ assert.equal(Otel.operation('dns.lookup').kind,'network');
+});

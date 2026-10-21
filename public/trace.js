@@ -135,6 +135,8 @@ function renderColumn(level,result) {
       card.append(el('div','card-bottom',`${date(item.first)} · ${duration(item.first===null?null:item.last-item.first)}`));
       card.addEventListener('click',()=>chooseTrace(item));
     } else {
+      const operation=Otel.operation(item.name);
+      if(operation)top.prepend(el('span',`pill operation-pill operation-${operation.kind}`,operation.label));
       if(item.error)top.append(el('span','pill error-pill','异常'));
       card.append(el('div','card-subtitle',item.service || '未提供服务'));
       card.append(el('div','mono card-subtitle',item.span_id || '缺少 Span ID'));
@@ -248,19 +250,27 @@ async function selectSpan(item) {
   }catch(error){if(token===state.detailToken)empty($('detail-content'),'记录读取失败',error.message);}
 }
 function attributeBlock(label,value,open=false) { const details=el('details','attribute-block'); details.open=open; details.append(el('summary','',label),el('pre','',text(value))); return details; }
-function renderSdkCard(resource) {
+function renderSdkNote(resource) {
   const sdk=Otel.sdk(resource);
-  if(!sdk) return null;
-  const card=el('section','sdk-card');
-  card.append(el('div','sdk-heading','OTel 资源标识'));
-  const title=el('strong','',sdk.languageLabel === undefined ? '遥测 SDK' : text(sdk.languageLabel));
-  card.append(title);
-  const meta=el('div','sdk-meta');
-  if(sdk.name!==undefined) meta.append(el('span','',`SDK ${text(sdk.name)}`));
-  if(sdk.version!==undefined) meta.append(el('span','',`SDK 版本 ${text(sdk.version)}`));
-  card.append(meta);
-  card.title='依据 telemetry.sdk.* 资源属性展示；不能由此确定 exporter 或 Span 类型编码。';
-  return card;
+  if(!sdk)return null;
+  const note=el('div','sdk-note');
+  note.append(el('div','',`SDK：${sdk.name===undefined?'—':text(sdk.name)} · 版本：${sdk.version===undefined?'—':text(sdk.version)}`),
+    el('div','',`SDK 语言：${sdk.languageLabel===undefined?'—':text(sdk.languageLabel)}`));
+  return note;
+}
+function renderOperationContent(operation,record) {
+  if(!operation || !['user','assistant','tool'].includes(operation.kind))return null;
+  const attrs=Otel.attributes(lookup(record,state.mapping.attributes) ?? record.spanAttributes);
+  const box=el('section',`operation-content content-${operation.kind}`);
+  if(operation.kind==='tool') {
+    const name=Otel.semantic(attrs,'tool.name');
+    box.append(el('div','operation-content-label','工具名称'),el('div','tool-name',name===undefined?'未提供 tool.name':text(name)));
+  } else {
+    const content=Otel.semantic(attrs,'content');
+    box.append(el('div','operation-content-label',operation.label),
+      el('pre',content===undefined?'content-missing':'',content===undefined?'该记录未提供 spanAttributes.content':text(content)));
+  }
+  return box;
 }
 function renderAttributeGroups(body,value,resource=false) {
   const groups=Otel.groups(value,resource);
@@ -286,11 +296,13 @@ function renderDetails() {
   const resource=lookup(record,state.mapping.resource), attrs=Otel.attributes(resource);
   const status=Otel.status(lookup(record,state.mapping.status));
   const body=el('div','detail-body'), badges=el('div','span-badges');
+  const operation=Otel.operation(item.name);
+  if(operation)badges.append(el('span',`pill operation-pill operation-${operation.kind}`,operation.label));
   badges.append(el('span',`pill ${status.kind==='error'?'error-pill':status.kind!=='ok'?'neutral-pill':''}`,status.label));
   const kind=lookup(record,state.mapping.kind);
   if(kind!==undefined) badges.append(el('span','pill kind-pill',Otel.spanKind(kind,state.mapping.kind_encoding)));
   body.append(badges,el('h3','',item.name || '未命名操作'));
-  const sdk=renderSdkCard(resource); if(sdk) body.append(sdk);
+  const content=renderOperationContent(operation,record);if(content)body.append(content);
   const pairs=[['服务',item.service || Otel.semantic(attrs,'service.name') || '—'],
     ['服务版本',Otel.semantic(attrs,'service.version')],['服务实例',Otel.semantic(attrs,'service.instance.id')],
     ['主机',item.host || Otel.semantic(attrs,'host.name') || '—'],['用户',Otel.semantic(attrs,'user.id') ?? Otel.semantic(attrs,'enduser.id')],
@@ -299,6 +311,7 @@ function renderDetails() {
   const meta=el('dl','detail-meta');
   for(const [key,value] of pairs) if(value!==undefined) meta.append(el('dt','',key),el('dd',key.includes('ID') || key==='父 Span'?'mono':'',typeof value==='string'?value:text(value)));
   body.append(meta);
+  const sdk=renderSdkNote(resource);if(sdk)body.append(sdk);
   const message=lookup(record,state.mapping.status_message);
   if(message!==undefined && message!=='') body.append(el('div',status.kind==='error'?'span-status-message error-message':'span-status-message',text(message)));
   const tabs=el('div','detail-tabs');

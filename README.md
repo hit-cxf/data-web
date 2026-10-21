@@ -103,3 +103,9 @@ node --check public/trace.js
 ```
 
 主要源码：`server.py`（扫描/HTTP）、`traceview.py`（Span 索引与兼容链路 API）、`hierarchy.py`（四层浏览与统计）、`public/trace.js` / `trace.css`（界面）、`public/otel.js`（OTel 展示语义）。旧版 API 与辅助源码保留兼容，新首页不再加载旧表格、对话气泡或甘特图。
+
+### Trajectory 业务调用展示
+
+根据严格匹配的 `trajectory.<三位编号>.<类型>` 在调用列表及详情中标注用户输入、Agent 回复、工具调用；`tool_result` 标记为工具结果，`session_started` 和 `done` 分别标注会话开始、执行结束。`POST /v1/messages`、`agent.execution`、`officeclaw.agent.invoke`、`dns.lookup` 分别标注接口请求、Agent 执行、Agent 入口、域名解析，不从名称推断消息正文。
+
+用户输入与 Agent 回复在详情名称下方完整展示 `spanAttributes.content`，以方框区分，不截断文本或结构化内容；工具记录在同一位置展示 `spanAttributes["tool.name"]`。字段缺失时明确提示，不回退成完整 JSON。SDK 信息不再作为顶部卡片，改为基础信息下方的两行小字。原始属性、事件与记录仍可完整查看。

@@ -17,15 +17,15 @@ def generate(root=ROOT):
         root_span = '%016x' % (1000 + index*20)
         total_ms = 2840 + (index % 9) * 170
         definitions = [
-            ('officeACE.request', 'officeACE', None, 0, total_ms),
-            ('agent.run', 'agent-runtime', 0, 45, total_ms-80),
-            ('context.load', 'context-service', 1, 80, 190),
-            ('llm.generate', 'model-gateway', 1, 310, 1080),
-            ('tool.read_file', 'tool-service', 1, 1450, 370),
-            ('tool.search_workspace', 'tool-service', 1, 1465, 520),
-            ('filesystem.read', 'storage', 4, 1480, 185),
-            ('llm.generate', 'model-gateway', 1, 2050, total_ms-2180),
-            ('response.write', 'officeACE', 0, total_ms-65, 40),
+            ('officeclaw.agent.invoke', 'officeACE', None, 0, total_ms),
+            ('agent.execution', 'agent-runtime', 0, 45, total_ms-80),
+            ('trajectory.001.session_started', 'context-service', 1, 80, 190),
+            ('trajectory.002.user_message', 'model-gateway', 1, 310, 1080),
+            ('trajectory.003.tool_call', 'tool-service', 1, 1450, 370),
+            ('trajectory.004.tool_result', 'tool-service', 1, 1465, 520),
+            ('POST /v1/messages', 'storage', 4, 1480, 185),
+            ('trajectory.005.assistant_message', 'model-gateway', 1, 2050, total_ms-2180),
+            ('trajectory.006.done', 'officeACE', 0, total_ms-65, 40),
         ]
         for ordinal, (name, service, parent, offset, length) in enumerate(definitions):
             sid = '%016x' % (1000 + index*20 + ordinal)
@@ -46,8 +46,11 @@ def generate(root=ROOT):
                 record['eventsName'][-1] = 'exception'
                 record['eventsAttributes'][-1] = {'exception.type':'TimeoutError','exception.message':'Workspace search exceeded the configured timeout','exception.stacktrace':'TimeoutError: Workspace search timed out\n    at searchWorkspace (tools/search.js:42:11)\n    at async runAgent (agent/run.js:85:9)'}
             if ordinal == 3:
-                record['spanAttributes']['input'] = {'role':'user','content':'请分析这个项目的执行流程，定位可能的性能瓶颈。'}
-                record['spanAttributes']['output'] = {'role':'assistant','content':'我将先读取目录结构，再检查调用关系与耗时分布。'}
+                record['spanAttributes']['content'] = '请分析这个项目的执行流程，定位可能的性能瓶颈。\n请保留每一步工具调用的结果。'
+            if ordinal == 7:
+                record['spanAttributes']['content'] = '已完成项目执行流程分析。\n\n主要耗时集中在模型生成与工作区搜索。两个工具操作存在并行执行，不能将它们的耗时简单相加。\n建议先检查搜索范围与模型请求的上下文大小，再对比优化前后的实际耗时。'
+            if ordinal in (4, 5):
+                record['spanAttributes']['tool.name'] = 'read_file'
             if ordinal == 4:
                 record['spanAttributes']['tool.arguments'] = {'path':'src/main.py'}
                 record['spanAttributes']['tool.result'] = 'def main():\n    prepare_workspace()\n    run_analysis()\n'
