@@ -5,9 +5,9 @@ import math
 import time
 import conversation
 
-PATHS = ('trace', 'span', 'parent', 'name', 'start', 'duration', 'service', 'host', 'status',
+PATHS = ('user', 'thread', 'trace', 'span', 'parent', 'name', 'start', 'duration', 'service', 'host', 'status',
          'kind', 'status_message', 'resource', 'attributes', 'event_time', 'event_name', 'event_attributes')
-DEFAULTS = {'trace': ['traceId'], 'span': ['spanId'], 'parent': ['parentSpanID'],
+DEFAULTS = {'user': ['resourceAttributes', 'user.id'], 'thread': ['spanAttributes', 'thread.id'], 'trace': ['traceId'], 'span': ['spanId'], 'parent': ['parentSpanID'],
             'name': ['spanName'], 'start': ['start'], 'duration': ['duration'],
             'service': ['serviceName'], 'host': ['resourceAttributes', 'host.name'],
             'status': ['statusCode'], 'kind': ['spanKind'], 'status_message': ['statusMessage'], 'resource': ['resourceAttributes'], 'attributes': ['spanAttributes'],
@@ -39,6 +39,11 @@ def initialize(conn):
         CREATE INDEX IF NOT EXISTS trace_groups_size_idx ON trace_group_results(cache_key,count DESC,first DESC,trace_key);
         CREATE INDEX IF NOT EXISTS trace_groups_duration_idx ON trace_group_results(cache_key,elapsed DESC,trace_key);
     ''')
+    columns = {row[1] for row in conn.execute('PRAGMA table_info(trace_spans)')}
+    for column in ('user_id', 'thread_id', 'user_key', 'thread_key'):
+        if column not in columns:
+            conn.execute('ALTER TABLE trace_spans ADD COLUMN '+column+' TEXT')
+    conn.execute('CREATE INDEX IF NOT EXISTS trace_user_thread_idx ON trace_spans(config_id,user_key,thread_key,trace_key)')
 
 
 def config(value, b):
@@ -102,7 +107,7 @@ def is_error(value):
 
 
 def ensure_index(scope, mapping, b):
-    encoded = b.compact_json({'normalization_version': 2, **{k: mapping[k] for k in ('trace','span','parent','name','start','duration','service','host','status','time_unit','duration_unit')}})
+    encoded = b.compact_json({'normalization_version': 3, **{k: mapping[k] for k in ('user','thread','trace','span','parent','name','start','duration','service','host','status','time_unit','duration_unit')}})
     identity = hashlib.sha256(encoded.encode()).hexdigest()
     with b.SCAN_LOCK:
         conn = b.connect()
@@ -116,18 +121,23 @@ def ensure_index(scope, mapping, b):
                 batch = []
                 for row in conn.execute('SELECT id,document FROM records WHERE file_id=?', (file['id'],)):
                     record = json.loads(row['document'])
-                    values = {k: first(record, mapping[k], b) for k in ('trace','span','parent','name','start','duration','service','host','status')}
+                    values = {k: first(record, mapping[k], b) for k in ('user','thread','trace','span','parent','name','start','duration','service','host','status')}
                     trace_id = string(values['trace']) or None
                     key = b.compact_json(['trace', trace_id] if trace_id else ['record', str(row['id'])])
+                    user_id = string(values['user']) or None
+                    thread_id = string(values['thread']) or None
+                    host = string(values['host']) or None
+                    user_key = b.compact_json(['user', user_id] if user_id else ['host', host] if host else ['unknown'])
+                    thread_key = b.compact_json(['thread', thread_id] if thread_id else ['unassigned'])
                     batch.append((identity, row['id'], key, trace_id, string(values['span']), string(values['parent']),
                                   string(values['name']), string(values['service']), string(values['host']),
                                   timestamp(values['start'], mapping['time_unit']),
-                                  duration(values['duration'], mapping['duration_unit']), is_error(values['status'])))
+                                  duration(values['duration'], mapping['duration_unit']), is_error(values['status']), user_id, thread_id, user_key, thread_key))
                     if len(batch) >= 2000:
-                        conn.executemany('INSERT INTO trace_spans VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', batch)
+                        conn.executemany('INSERT INTO trace_spans (config_id,record_id,trace_key,trace_id,span_id,parent_id,name,service,host,stamp,duration,error,user_id,thread_id,user_key,thread_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', batch)
                         batch.clear()
                 if batch:
-                    conn.executemany('INSERT INTO trace_spans VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', batch)
+                    conn.executemany('INSERT INTO trace_spans (config_id,record_id,trace_key,trace_id,span_id,parent_id,name,service,host,stamp,duration,error,user_id,thread_id,user_key,thread_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', batch)
                 conn.execute('INSERT INTO trace_file_cache VALUES (?,?)', (identity, file['id']))
             conn.commit()
         except Exception:

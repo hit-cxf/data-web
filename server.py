@@ -21,7 +21,7 @@ from urllib.parse import unquote, urlsplit
 BASE_DIR = Path(__file__).resolve().parent
 PUBLIC_DIR = BASE_DIR / "public"
 CACHE_DIR = BASE_DIR / ".cache"
-VERSION = "2.2"
+VERSION = "3.0"
 MAX_BODY_BYTES = 1024 * 1024
 MAX_PAGE_SIZE = 200
 SCAN_LOCK = threading.Lock()
@@ -102,6 +102,8 @@ def initialize_database():
         conversation.initialize(conn)
         import traceview
         traceview.initialize(conn)
+        import hierarchy
+        hierarchy.initialize(conn)
 
 
 def fingerprint(record):
@@ -791,7 +793,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             self.check_origin()
             endpoint = urlsplit(self.path).path
-            if endpoint not in ("/api/scan", "/api/query", "/api/record", "/api/conversations", "/api/conversation/messages", "/api/traces", "/api/trace/spans"):
+            if endpoint not in ("/api/scan", "/api/query", "/api/record", "/api/conversations", "/api/conversation/messages", "/api/traces", "/api/trace/spans", "/api/browse"):
                 raise APIError("接口不存在。", 404)
             if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
                 raise APIError("请求 Content-Type 应为 application/json。", 415)
@@ -813,6 +815,9 @@ class Handler(BaseHTTPRequestHandler):
                 result = query_data(payload)
             elif endpoint == "/api/record":
                 result = record_details(payload)
+            elif endpoint == "/api/browse":
+                import hierarchy
+                result = hierarchy.query(payload, sys.modules[__name__])
             elif endpoint in ("/api/traces", "/api/trace/spans"):
                 import traceview
                 backend = sys.modules[__name__]
@@ -840,7 +845,7 @@ class Handler(BaseHTTPRequestHandler):
                                      "demo_root": str(BASE_DIR / "demo-data"), "version": VERSION,
                                      "chat_demo_root": str(BASE_DIR / "chat-demo-data"),
                                      "trace_demo_root": str(BASE_DIR / "trace-demo-data"),
-                                     "capabilities": ["field_filters", "conversations", "deduplicate", "traces", "otel_semantics", "trace_query_cache"]})
+                                     "capabilities": ["field_filters", "conversations", "deduplicate", "traces", "otel_semantics", "trace_query_cache", "hierarchy_browser"]})
                 return
             if path.startswith("/api/"):
                 raise APIError("接口不存在。", 404)

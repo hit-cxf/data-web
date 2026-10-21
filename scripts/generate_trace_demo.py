@@ -36,7 +36,7 @@ def generate(root=ROOT):
                       'spanName': name, 'spanKind': 0 if ordinal < 3 else 2,
                       'serviceName': service, 'fullServiceName': 'officeACE.'+service,
                       'resourceAttributes': {'host.name': host, 'user.id': 'demo-user-%02d' % (index%3+1), 'os.type': 'windows', 'service.version': '2.4.0', 'service.name':service, 'service.instance.id':'demo-instance-'+str(index%3+1), 'telemetry.sdk.name':'opentelemetry', 'telemetry.sdk.language':'nodejs', 'telemetry.sdk.version':'2.0.1', 'process.runtime.name':'node', 'process.runtime.version':'22.14.0'},
-                      'spanAttributes': {'operation': name, 'session.id': 'demo-session-%03d' % index},
+                      'spanAttributes': {'operation': name, 'thread.id': 'demo-thread-%02d-%02d' % (index%3+1,(index//3)//3+1)},
                       'duration': int(length*1e6), 'statusCode': 2 if error else 1,
                       'statusMessage': 'Search timed out; fallback completed' if error else '',
                       'eventsTs': [event_start, int((start+(offset+length-5)/1000)*1e9)] if ordinal in (3,5,7) else [],

@@ -1,20 +1,20 @@
-# officeACE 链路工作台 · 2.2
+# officeACE 会话工作台 · 3.0
 
-本地运行的 Trace / Span 数据分析页面。新版本已替换原有的数据表格与对话页面，按链路结构组织回流数据。Python 3.9+，后端只使用标准库，前端无依赖；无需 npm、pip 或外网。
+本地运行的回流数据浏览器，Python 3.9+，只使用标准库，前端无外部依赖。支持内网离线运行，不上传数据。
 
 ## 启动
 
-macOS 双击 `start.command`，或在本目录运行：
+macOS 双击 `start.command`，或在项目目录运行：
 
 ```sh
 python3 server.py
 ```
 
-Windows 在本目录的终端运行 `python server.py`。浏览器打开 http://127.0.0.1:8766/ 。升级时先停止旧服务，再启动新版本并刷新浏览器。
+Windows 使用 `python server.py`。浏览器打开 http://127.0.0.1:8766/ 。更新代码后停止旧服务、重新启动并刷新网页。无需删除原有缓存；数据库会自动升级，新字段首次使用时建立索引。
 
-## 连接数据
+## 数据目录
 
-点击右上角「连接数据目录」，输入**运行 Python 服务的电脑上**的绝对路径：
+点击右上角「连接数据目录」，输入运行 Python 服务的电脑上的数据根目录：
 
 ```text
 数据根目录/
@@ -24,130 +24,82 @@ Windows 在本目录的终端运行 `python server.py`。浏览器打开 http://
         spans.json
 ```
 
-目录时间筛选按 `dd/hh/mm` 目录计算，包含起止分钟，跨日范围按时间顺序比较。重新扫描会增量更新新增、修改、删除的文件。支持 JSON 数组、单条记录、常见封装数组以及 JSONL；文件解析问题显示在扫描提示中。浏览器不直接读取文件路径，由本机 Python 服务读取。
+支持 JSON 数组、单条记录、常见封装数组和 JSONL/NDJSON。扫描会增量更新新增、变化和删除的文件，解析问题通过提示反馈。目录日 / 时 / 分范围包含起止分钟。
 
-可点击「载入示例」查看合成数据：36 条链路、324 个不同 Span，每条重复导出三次，共 972 条原始记录。示例由 `python3 scripts/generate_trace_demo.py` 生成，不含真实业务数据。
+## 四层浏览
 
-## 界面
+已移除中间甘特图。从左到右是：
 
-- **顶部概览**：匹配链路数、命中 Span 数、命中异常 Span 数、匹配记录的最长时间跨度。
-- **左侧链路列表**：按开始时间从新到旧分页，支持搜索 Trace ID、操作名、服务名、主机名。
-- **中间时间瀑布图**：横条位置和宽度表示开始时间与耗时；按父子关系缩进，支持折叠、展开、缩放。不同服务使用不同颜色，异常 Span 使用橙红色。默认载入 200 个 Span，点击继续加载。
-- **右侧详情**：点击任意 Span 查看资源属性、Span 属性、状态、事件、完整原始 JSON、重复记录来源。原始记录支持复制和导出，不截断正文或工具结果。窄屏下详情作为侧边浮层打开。
+1. **用户列表**：默认按 `resourceAttributes["user.id"]` 聚合。缺少用户 ID 时按主机区分，并标注「主机标识」；两者都缺失时放入「未识别用户」分组。
+2. **会话列表**：同一用户下按 `spanAttributes["thread.id"]` 聚合，一个会话可以包含多个不同的 Trace ID。
+3. **链路列表**：显示当前会话中的 Trace。
+4. **调用列表**：显示当前 Trace 的 Span，按开始时间从早到晚排序，逐页加载完整记录。
 
-**筛选语义**：字段条件作用于记录，列表显示包含命中记录的 Trace；打开某条 Trace 后，时间轴显示其在选定目录时间范围内的全部 Span，即使其他 Span 未命中字段条件。这样可以保留调用上下文。跨出目录时间范围的父节点不会被额外读取。
+右侧详情：
 
-列表中的 Span 数、异常数、耗时基于命中记录；打开后的详情统计基于完整展示的链路，因此两者可能不同。
+- 点击用户：会话数、链路数、调用数、异常数、主机数、服务数、观测时间范围、Span 累计耗时、主机与服务分布、常见调用。分布最多显示前 20 项。
+- 点击调用：现有 Span 详情，包括 OTel SDK 信息、分组属性、事件、异常堆栈、完整原始 JSON、复制/导出与重复来源。
 
-## 字段映射
+点击用户后自动展开其第一个会话、链路的调用列表，但右侧继续显示用户统计，直到点击具体 Span。切换上级选择会更新下级列表。四列独立分页。窄屏可横向滚动列表，右侧详情作为浮层展示，也可通过「查看详情」打开。
 
-扫描后会按实际发现的字段自动匹配，点击「字段映射」可更改。所有映射都可留空；未找到的结构会明确提示。输入和输出保留在属性或原始记录中，不再推断成对话气泡。
+### 会话关联规则
 
-| 映射 | 默认候选 | 用途 |
-| --- | --- | --- |
-| Trace ID | `traceId` | 聚合同一条链路 |
-| Span ID | `spanId` / `spanID` | 当前调用的唯一标识 |
-| 父 Span ID | `parentSpanID` | 关联父子调用 |
-| 操作名称 | `spanName` | 时间轴行名称 |
-| 开始时间 | `start` | 时间轴起点 |
-| 持续时间 | `duration` | 横条宽度 |
-| 服务名称 | `serviceName` / `fullServiceName` | 服务配色与搜索 |
-| 主机名称 | `resourceAttributes["host.name"]` | 主机搜索与详情 |
-| 状态码 | `statusCode` | 数值 2 或 ERROR 等标准错误标记显示异常 |
-| 资源属性 | `resourceAttributes` | 资源详情 |
-| Span 属性 | `spanAttributes` | 业务参数、输入输出、工具调用等详情 |
-| 事件时间 | `eventsTs` | 事件时间戳 |
-| 事件名称 | `eventsName` | 事件名称 |
-| 事件属性 | `eventsAttributes` | 事件详情 |
+- `thread.id` 是包含点号的完整键名：`spanAttributes["thread.id"]` 不等于 `spanAttributes.thread.id`。
+- 相同 thread ID 在不同用户下相互隔离。
+- 某条 Span 缺少 thread ID 时，只在同一用户、同一 Trace 中存在**唯一可确定的 thread ID**时沿用该关联；若存在多个冲突值，则不猜测。
+- 不能关联的调用保留在「未关联会话」里，该分组不计入已关联会话数，且在会话列表中排在已关联会话之后。
+- 不同 Trace ID 的独立 DNS 记录不会被随意拼接。缺少会话 ID 的 DNS Trace 仍可在未关联分组中查看。
 
-路径按完整键名区分：`resourceAttributes["host.name"]` 与 `resourceAttributes.host.name` 不同。数组字段通过 `[*]` 表示元素层级；链路标识和时间映射应尽量选择单值字段，遇到多个值时使用第一个。
+## 筛选与缓存
 
-开始时间支持 ISO 格式和 Unix 时间戳，自动识别秒、毫秒、微秒、纳秒，也可指定。**duration 无法仅靠数值推断单位，默认纳秒，请根据实际格式调整。** `ts` 的业务含义未知，不自动替代 `start`。
+支持用户/会话/Trace/操作/服务/主机关键词搜索、任意嵌套字段的包含/等于/存在/不存在/范围条件、目录时间范围、完整记录去重、「只看多节点链路」、按时间/Span 数量/耗时排序。
 
-## 缺失或不完整数据
+字段条件用于命中记录；四层浏览保留命中链路在选定目录时间内的完整上下文。用户和会话的统计基于这些保留下来的调用。相同 Trace ID 如果确实属于不同用户或不同会话，会在各自范围内分别展示。
 
-- 缺少 Trace ID：每条记录单独显示，不把不相关记录合并成一条链路。
-- 缺少 Span ID：保留时间分布，但不能完整连接父子关系。
-- 父节点缺失：作为顶层节点展示并提示，常见于采样或目录时间范围不完整。
-- 同一 Trace 中 Span ID 重复：不随意选择其中一个作为父节点；提示标识不唯一。
-- 循环引用：断开遍历避免死循环，保留所有记录并提示。
-- 时间无法识别或 duration 负数：保留记录，显示提示，不伪造耗时。开始时间有效且缺少耗时时只显示最小定位条，不代表真实耗时。
-- 时间轴使用浮点秒换算相对位置，适合毫秒级分析，不承诺纳秒精度。
+去重依据完整 JSON 的 SHA-256，忽略对象键顺序，保留数组顺序；不会只按输入文字、Trace ID 或 Span ID 去重。关闭去重后，重复记录也会计入调用数。
 
-事件的三个字段支持标量或数组。数组按位置对应，长度不同时保留已有项，原始内容也可单独展开。点击 Span 后，已选 Span 的事件会标在时间轴上；详情「事件」页展示完整内容。事件时间使用开始时间配置的时间单位。
+SQLite 缓存在 `.cache/`。分层成员关系与统计聚合后缓存，选择用户、会话、链路或分页不再解析全部原始 JSON。最多保留 3 组浏览查询条件，重新扫描后自动失效。首次建立索引或新的筛选范围仍需要处理数据。当前没有用公司真实数据验证性能。
 
-## 筛选与去重
+## 字段映射与 OTel
 
-「筛选条件」支持任意层级字段的包含、等于、字段存在、字段不存在、范围比较。多个条件取 AND。包含比较不区分大小写；等于使用原始文本精确比较。范围支持数字或 ISO 时间。字段存在包含显式 `null`、`false`、`0`。数组按任一元素满足条件计算，同一条记录不会因多个匹配元素重复出现。
+「字段映射」可指定用户 ID、会话 ID、Trace ID、Span ID、父 Span ID、操作名、开始时间、耗时、服务、主机、状态、资源属性、Span 属性与事件字段。新版本会自动优先匹配已知的 `user.id` 和 `thread.id` 路径，保留其他已有映射设置。
 
-默认开启「过滤相同记录」。对完整 JSON 归一化后计算 SHA-256：忽略对象键顺序，保留数组顺序；任何字段内容不同都视为不同记录。去重不依据 Trace ID / Span ID。详情中的副本数及来源统计覆盖当前已扫描的数据，最多列出 200 个来源位置。
+- 开始时间支持 ISO 和 Unix 时间戳，可自动识别秒/毫秒/微秒/纳秒。
+- 标量 duration 默认纳秒，必须根据实际格式确认单位。也兼容 JavaScript SDK 的 `[seconds, nanoseconds]` 时间二元组。
+- 数字 `spanKind` 的 JavaScript SDK 与 OTLP 编码不同，需手动选择；默认只解读文字枚举，不依据 SDK 语言猜测编码。
+- 状态区分 UNSET、OK、ERROR，未知或缺失不标为成功。
+- SDK 语言/版本、服务版本、运行时版本分别展示。`telemetry.sdk.language=nodejs` 不足以单独确定 exporter 或完整导出格式。
+- 事件支持平铺的 `eventsTs/eventsName/eventsAttributes` 位置配对，也支持记录中的 `events` 对象数组。异常事件单独突出显示，原始字段仍完整保留。
+- 当前输入格式为独立 Span 记录，不直接支持完整 OTLP `resourceSpans/scopeSpans` 信封。时间换算使用浮点秒，不承诺纳秒精度。
 
-## 数据量与缓存
+参考：[OTel 资源语义](https://opentelemetry.io/docs/specs/semconv/resource/)、[JavaScript SpanKind](https://open-telemetry.github.io/opentelemetry-js/enums/_opentelemetry_api._opentelemetry_api.SpanKind.html)。
 
-SQLite 本地缓存位于 `.cache/index.sqlite3`，原始数据不会上传。目录扫描、任意字段索引和链路字段索引可复用；文件变动会失效对应缓存。筛选在后端执行，浏览器只接收一页链路、一页 Span 及当前记录详情。
+## 示例
 
-单条超大链路的层级排序会在后端读取该链路的轻量索引来还原完整父子关系，再分页返回。首次索引耗时取决于记录大小、磁盘与设备性能；本版本没有用真实公司数据做性能验证。
-
-不要把 `.cache` 中的实际业务数据放入分发包。发布包仅含代码和合成示例。
-
-## 验证
+点击「载入示例」体验 3 个用户、12 个会话、36 条链路、324 个不同 Span。每条重复导出三次，共 972 条原始记录。示例仅包含合成数据，可重新生成：
 
 ```sh
-python3 -m unittest discover -s tests -v
-node --check public/trace.js
+python3 scripts/generate_trace_demo.py
 ```
-
-测试覆盖目录扫描、通用嵌套字段筛选、去重及来源、链路聚合、筛选后保留链路上下文、自定义映射、缺失字段、重复 Span ID、循环关系、分页与重新扫描失效。
-
-## 文件
-
-- `server.py`：本地 HTTP 服务、扫描与通用字段索引。
-- `traceview.py`：链路索引、列表聚合、父子关系与瀑布图分页。
-- `public/index.html`、`public/trace.css`、`public/trace.js`：新版界面。
-- `scripts/generate_trace_demo.py`：合成链路数据生成器。
-
-旧版对话 API 与部分前端辅助源码保留用于兼容和已有回归检查，新首页不再加载旧界面。
-
-## 2.1 · OpenTelemetry 展示优化
-
-- 通过 `telemetry.sdk.name`、`telemetry.sdk.language`、`telemetry.sdk.version` 展示采集 SDK 卡片；`nodejs` 显示为 Node.js。SDK 版本与 `service.version`、`process.runtime.version` 分开显示。这些资源属性不能单独确定 exporter 或实际落盘格式。
-- 资源属性按服务实例、主机用户、运行环境、采集 SDK 分组；Span 属性按 HTTP/RPC、数据库、AI/工具、输入输出、异常与其他字段分组。未知字段和复杂值完整保留，可展开原始结构。
-- Span 状态区分 `UNSET`、`OK`、`ERROR`，缺失或未知状态不标为成功。异常事件突出显示类型、信息和完整调用堆栈；事件本身不会自动把 Span 的状态改成 ERROR。
-- 字段映射增加调用类型和状态说明。**数字 SpanKind 编码必须手动确认**：JavaScript SDK 的 INTERNAL/SERVER/CLIENT 为 0/1/2，OTLP 对应 1/2/3。默认只解释文字枚举，数字显示「待确认编码」，不会因为 SDK 语言是 nodejs 就猜测导出格式。
-- 开始时间与耗时兼容 JavaScript SDK `[seconds, nanoseconds]` 二元组；标量耗时仍使用指定单位。
-- 详情支持常见 OTLP typed KeyValue 属性的解码和普通 `events` 对象数组；原始 JSON 不变。这不代表支持直接导入完整 OTLP `resourceSpans/scopeSpans` 信封，当前文件仍应是一条条独立 Span 记录。
-
-参考：[OTel 资源语义](https://opentelemetry.io/docs/specs/semconv/resource/)、[JavaScript SDK SpanKind](https://open-telemetry.github.io/opentelemetry-js/enums/_opentelemetry_api._opentelemetry_api.SpanKind.html)、[OTLP Trace 定义](https://github.com/open-telemetry/opentelemetry-proto/blob/main/opentelemetry/proto/trace/v1/trace.proto)。
-
-语义展示测试：`node --test tests/test_otel.js`。
-
-
-## 2.2 · 单节点链路定位与查询加速
-
-- 增加「只看多节点链路」，按当前条件命中的记录数 ≥ 2 选择 Trace；打开后仍显示目录时间范围内的完整链路。
-- 列表支持最近优先、Span 数量最多、耗时最长三种排序。DNS 单节点不会默认被隐藏，也不会与不同 Trace ID 的记录合并。
-- 列表上方显示实际分组字段、单节点链路数、其中的独立 `dns.lookup` 数、缺失 Trace ID / Span ID 数。若 Trace ID 和 Span ID 映射到了同一字段，会提示检查。
-- 查询结果聚合一次后缓存在本地 SQLite，分页、排序、切换多节点选项复用聚合结果；最多保留 3 组查询条件，重新扫描自动失效。增加按记录和映射配置联合查找的索引。
-- 状态栏显示后端耗时及是否复用缓存。首次索引、首次使用新的字段筛选或查询条件仍需处理记录。
-
-如果 DNS 记录的 Trace ID 各不相同，按 Trace ID 展示时它们本来就是独立链路。是否有主业务链路，需在清空其他字段条件、放宽时间范围后查看多节点统计；不能仅按 host.name 把它们拼成一条 Trace。
-
-本机合成基准（475,975 条轻量记录，主要为独立 DNS Span，非真实公司数据）：扫描约 8.8 秒，首次索引及链路聚合约 6.7 秒，缓存后的列表查询约 80 毫秒。实际耗时受记录体积、磁盘和机器性能影响。7.2 万条相同合成数据的列表复查由旧实现约 200 毫秒降至约 9 毫秒。
 
 ## 导出所有用户输入
-
-在项目目录运行：
-
-```sh
-python3 export_user_inputs.py "/实际回流数据根目录"
-```
-
-默认保存为**数据根目录下的 `user_inputs.json`**。遍历 `dd/hh/mm/*.json`（也支持 JSONL、NDJSON），提取每条记录的 `spanAttributes.content`，同时记录用户 ID、主机、start、Trace ID、Span ID 和来源位置。字段中的完整文本、对象、数组以及显式空值都原样保留；没有这个字段的记录跳过，不额外猜测角色。
-
-已有三份重复导出时，可以按完整原始记录去重，不会仅因两个不同时间的输入文字相同就合并：
 
 ```sh
 python3 export_user_inputs.py "/实际回流数据根目录" --deduplicate
 ```
 
-也支持单个输入文件，以及 `-o "/其他目录/inputs.json"` 自定义输出位置。默认输出名已加入 `.gitignore`，自定义名称时请自行忽略业务数据文件。脚本逐文件读取、逐条写入，不把所有导出内容一次性放入内存；写入完成后才替换输出文件。无法读取的文件会显示警告，部分文件失败时退出码为 2，全部失败时不会替换已有输出。无需启动网页服务。
+提取每条记录的 `spanAttributes.content`，保存到数据根目录下的 `user_inputs.json`，同时保留用户、主机、start、Trace/Span 标识和来源。完整文本、结构化内容及显式空值均保留；没有该字段的记录跳过。`--deduplicate` 按完整原始记录去重，去掉该参数可保留全部重复记录。
+
+也支持单个 JSON/JSONL 文件，以及 `-o "/其他目录/inputs.json"` 自定义输出路径。无需启动服务。逐文件读取、逐条写入，完成后才替换输出文件；部分文件失败返回退出码 2，全部失败不覆盖已有输出。
+
+## Git 与验证
+
+`.cache/`、示例数据、压缩包、临时截图和默认用户输入导出文件均已忽略。自定义导出文件名时，请自行忽略业务数据。本项目通过 Git 管理，不需要打包后再运行。
+
+```sh
+python3 -m unittest discover -s tests -v
+node --test tests/test_otel.js tests/test_filters.js tests/test_projection.js
+node --check public/trace.js
+```
+
+主要源码：`server.py`（扫描/HTTP）、`traceview.py`（Span 索引与兼容链路 API）、`hierarchy.py`（四层浏览与统计）、`public/trace.js` / `trace.css`（界面）、`public/otel.js`（OTel 展示语义）。旧版 API 与辅助源码保留兼容，新首页不再加载旧表格、对话气泡或甘特图。
