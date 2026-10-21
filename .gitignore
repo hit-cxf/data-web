@@ -21,3 +21,7 @@ trace-demo-data/
 /docs/**/*.jpg
 /docs/**/*.jpeg
 /docs/**/*.webp
+
+# 本地用户输入导出，避免把业务数据提交到 Git
+user_inputs.json
+.user_inputs-*.tmp
